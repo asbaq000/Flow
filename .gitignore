@@ -1,0 +1,20 @@
+node_modules
+.next
+data/pg
+data/*.db*
+.env
+.env.local
+next-env.d.ts
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Local editor/tooling config (holds a dev CEO_SETUP_CODE)
+.claude
+
+# Vercel
+.vercel
+
+# OS noise
+Thumbs.db
+.DS_Store

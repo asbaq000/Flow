@@ -1,0 +1,173 @@
+'use client';
+
+import type {
+  Block, Comment, Notification, Priority, ProgressUpdate, Status, Tag, TaskFull, TaskSheet,
+  User, VoiceNote,
+} from './types';
+
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new ApiError(data.error ?? `Request failed (${res.status})`, res.status);
+  return data as T;
+}
+
+export const api = {
+  tasks: {
+    list: (params: { archived?: boolean; q?: string } = {}) => {
+      const search = new URLSearchParams();
+      if (params.archived) search.set('archived', '1');
+      if (params.q) search.set('q', params.q);
+      const qs = search.toString();
+      return request<{ tasks: TaskFull[]; users: User[]; tags: Tag[]; me: User }>(
+        `/api/tasks${qs ? `?${qs}` : ''}`
+      );
+    },
+    get: (id: string) =>
+      request<{
+        task: TaskFull;
+        comments: Comment[];
+        activity: import('./types').ActivityItem[];
+        abilities: import('./permissions').TaskAbilities;
+      }>(`/api/tasks/${id}`),
+    create: (body: {
+      title: string;
+      description?: string;
+      priority?: Priority;
+      parentId?: string | null;
+      dueDate?: number | null;
+      links?: { url: string; label?: string }[];
+      tagIds?: string[];
+    }) =>
+      request<{ task: TaskFull; routedTo: { id: string; name: string } | null }>('/api/tasks', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (
+      id: string,
+      body: Partial<{
+        title: string;
+        description: string;
+        status: Status;
+        priority: Priority;
+        assigneeId: string | null;
+        dueDate: number | null;
+        estimate: number | null;
+        position: number;
+        archived: boolean;
+        tagIds: string[];
+      }>
+    ) => request<{ task: TaskFull }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: string) => request<{ ok: true }>(`/api/tasks/${id}`, { method: 'DELETE' }),
+    split: (id: string, pieces: { title: string; assigneeId: string | null; estimate?: number | null }[]) =>
+      request<{ task: TaskFull }>(`/api/tasks/${id}/split`, {
+        method: 'POST',
+        body: JSON.stringify({ pieces }),
+      }),
+    addLink: (id: string, url: string, label: string) =>
+      request<{ link: import('./types').TaskLink }>(`/api/tasks/${id}/links`, {
+        method: 'POST',
+        body: JSON.stringify({ url, label }),
+      }),
+    removeLink: (linkId: string) => request<{ ok: true }>(`/api/links/${linkId}`, { method: 'DELETE' }),
+    /** People who can be @mentioned on this task — i.e. who can actually see it. */
+    members: (id: string) => request<{ members: User[] }>(`/api/tasks/${id}/members`),
+  },
+  voice: {
+    /** Uploads a recording. Omit commentId to attach it to the task brief. */
+    upload: async (taskId: string, blob: Blob, durationMs: number, commentId?: string) => {
+      const form = new FormData();
+      form.append('audio', blob, 'note.webm');
+      form.append('durationMs', String(Math.round(durationMs)));
+      if (commentId) form.append('commentId', commentId);
+
+      // No Content-Type header — the browser must set the multipart boundary.
+      const res = await fetch(`/api/tasks/${taskId}/voice`, { method: 'POST', body: form });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!res.ok) throw new ApiError(data.error ?? 'Upload failed', res.status);
+      return data as { voiceNote: VoiceNote };
+    },
+    remove: (id: string) => request<{ ok: true }>(`/api/voice/${id}`, { method: 'DELETE' }),
+    src: (id: string) => `/api/voice/${id}`,
+  },
+  sheet: {
+    get: (userId: string) => request<{ sheet: TaskSheet }>(`/api/users/${userId}/sheet`),
+  },
+  progress: {
+    list: (taskId: string) => request<{ updates: ProgressUpdate[] }>(`/api/tasks/${taskId}/progress`),
+    /** Log a routine update. */
+    post: (taskId: string, body: {
+      percent: number; doneSummary: string; remaining?: string; blockers?: string; hoursSpent?: number | null;
+    }) =>
+      request<{ update: ProgressUpdate; task: TaskFull }>(`/api/tasks/${taskId}/progress`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    /** Hand the task to a Team Lead for review. */
+    submit: (taskId: string, body: {
+      doneSummary: string; remaining?: string; blockers?: string; percent?: number; hoursSpent?: number | null;
+    }) =>
+      request<{ task: TaskFull }>(`/api/tasks/${taskId}/progress`, {
+        method: 'POST',
+        body: JSON.stringify({ ...body, submit: true }),
+      }),
+  },
+  review: {
+    decide: (taskId: string, decision: 'approve' | 'request_changes', note: string) =>
+      request<{ task: TaskFull }>(`/api/tasks/${taskId}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ decision, note }),
+      }),
+  },
+  comments: {
+    list: (taskId: string) => request<{ comments: Comment[] }>(`/api/tasks/${taskId}/comments`),
+    add: (taskId: string, body: string) =>
+      request<{ comment: Comment }>(`/api/tasks/${taskId}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ body }),
+      }),
+    remove: (id: string) => request<{ ok: true }>(`/api/comments/${id}`, { method: 'DELETE' }),
+    setResolved: (id: string, resolved: boolean) =>
+      request<{ ok: true }>(`/api/comments/${id}`, { method: 'PATCH', body: JSON.stringify({ resolved }) }),
+  },
+  activity: {
+    list: (taskId: string) =>
+      request<{ activity: import('./types').ActivityItem[] }>(`/api/tasks/${taskId}/activity`),
+  },
+  notifications: {
+    list: () => request<{ notifications: Notification[]; unread: number }>('/api/notifications'),
+    read: (ids: string[] | 'all') =>
+      request<{ ok: true }>('/api/notifications/read', { method: 'POST', body: JSON.stringify({ ids }) }),
+  },
+  users: {
+    list: () => request<{ users: (User & { open_tasks: number })[] }>('/api/users'),
+    update: (id: string, body: { role?: string; title?: string }) =>
+      request<{ user: User }>(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    /** Offboards someone who has left. Their work history is kept. */
+    remove: (id: string) =>
+      request<{ removed: { name: string; email: string; reassigned: number } }>(
+        `/api/users/${id}`,
+        { method: 'DELETE' }
+      ),
+  },
+  tags: {
+    create: (name: string, color: string) =>
+      request<{ tag: Tag }>('/api/tags', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  },
+  logout: () => request<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
+};
+
+export const serializeDoc = (blocks: Block[]) => JSON.stringify(blocks);

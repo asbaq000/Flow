@@ -1,0 +1,345 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------
+   Notion-derived design tokens. Light is the base; dark overrides
+   only the values, so every component stays theme-agnostic.
+---------------------------------------------------------------- */
+:root {
+  --bg: #ffffff;
+  --bg-sidebar: #f7f7f5;
+  --bg-panel: #ffffff;
+  --bg-hover: rgba(55, 53, 47, 0.06);
+  --bg-active: rgba(55, 53, 47, 0.1);
+  --bg-input: #ffffff;
+  --bg-subtle: #f7f7f5;
+  --bg-card: #ffffff;
+
+  --text: #37352f;
+  --text-secondary: #787774;
+  --text-tertiary: #9b9a97;
+  --text-inverse: #ffffff;
+
+  --border: #e9e9e7;
+  --border-strong: #dcdcda;
+
+  --accent: #2383e2;
+  --accent-hover: #1a6dc0;
+  --accent-soft: rgba(35, 131, 226, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 15, 15, 0.1);
+  --shadow-lg: 0 12px 32px rgba(15, 15, 15, 0.14), 0 2px 6px rgba(15, 15, 15, 0.08);
+
+  --radius: 6px;
+
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --bg: #191919;
+  --bg-sidebar: #202020;
+  --bg-panel: #252525;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.1);
+  --bg-input: #2a2a2a;
+  --bg-subtle: #222222;
+  --bg-card: #252525;
+
+  --text: #e6e6e4;
+  --text-secondary: #9b9a97;
+  --text-tertiary: #6f6f6c;
+  --text-inverse: #191919;
+
+  --border: #2f2f2f;
+  --border-strong: #3d3d3d;
+
+  --accent: #4a9eff;
+  --accent-hover: #6cb0ff;
+  --accent-soft: rgba(74, 158, 255, 0.16);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-sidebar: var(--bg-sidebar);
+  --color-panel: var(--bg-panel);
+  --color-subtle: var(--bg-subtle);
+  --color-card: var(--bg-card);
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-secondary);
+  --color-ink-3: var(--text-tertiary);
+  --color-edge: var(--border);
+  --color-edge-strong: var(--border-strong);
+  --color-accent: var(--accent);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica,
+    'Apple Color Emoji', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------- scrollbars: thin and only visible on hover, like Notion ---------- */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.scroll-thin:hover {
+  scrollbar-color: var(--border-strong) transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scroll-thin:hover::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+.scroll-thin::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------- primitives ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius);
+  padding: 5px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 90ms ease, border-color 90ms ease, opacity 90ms ease;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.btn-outline {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+}
+.btn-outline:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.btn-danger {
+  color: #e03e3e;
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(224, 62, 62, 0.1);
+}
+
+.input {
+  width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  padding: 7px 10px;
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 90ms ease, box-shadow 90ms ease;
+}
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.menu {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: 60;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+.menu-item:hover,
+.menu-item[data-active='true'] {
+  background: var(--bg-hover);
+}
+
+/* ---------- block editor ---------- */
+[contenteditable][data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+[contenteditable] {
+  outline: none;
+  word-break: break-word;
+}
+.block-code {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  tab-size: 2;
+}
+
+.mention {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ---------- animation ---------- */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-pop {
+  animation: pop-in 120ms ease-out;
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.animate-slide {
+  animation: slide-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-fade {
+  animation: fade-in 120ms ease-out;
+}
+
+.drag-ghost {
+  opacity: 0.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pop,
+  .animate-slide,
+  .animate-fade {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   Mobile. The layout is desktop-first; these rules make it usable
+   on a phone without shipping a second UI.
+---------------------------------------------------------------- */
+
+/* iOS zooms the page whenever a focused input is under 16px. */
+@media (max-width: 640px) {
+  .input,
+  input[type='text'],
+  input[type='email'],
+  input[type='password'],
+  input[type='date'],
+  input[type='number'],
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Give every tap target a finger-sized hit area without changing how it looks. */
+@media (pointer: coarse) {
+  .btn,
+  .menu-item {
+    min-height: 36px;
+  }
+  button {
+    touch-action: manipulation;
+  }
+  /* Hover-reveal controls can never be revealed by a finger, so pin them on. */
+  .group:hover .opacity-0,
+  .opacity-0 {
+    opacity: 1 !important;
+  }
+}
+
+/* Momentum scrolling inside the panels. */
+.scroll-thin {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Respect the notch / home indicator. */
+@supports (padding: max(0px)) {
+  .safe-b {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+}

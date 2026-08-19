@@ -1,0 +1,946 @@
+import { many, one, run, tx, nextTaskSeq } from './pg';
+import { newId } from './ids';
+import type {
+  ActivityItem, Comment, Notification, Priority, ProgressKind, ProgressUpdate, SheetEntry,
+  Status, Tag, Task, TaskFull, TaskLink, TaskSheet, User, VoiceNote,
+} from './types';
+import { docToPlain } from './types';
+import { normalizeUrl } from './url';
+import { publish } from './events';
+import { appUrl, sendMail } from './email';
+
+const USER_COLS = 'id, email, name, role, avatar_color, title, created_at';
+
+export async function getUser(id: string | null): Promise<User | null> {
+  if (!id) return null;
+  return one<User>(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [id]);
+}
+
+export async function getUserByEmail(email: string): Promise<User | null> {
+  return one<User>(`SELECT ${USER_COLS} FROM users WHERE email = ?`, [email.trim().toLowerCase()]);
+}
+
+export async function allUsers(): Promise<User[]> {
+  return many<User>(
+    `SELECT ${USER_COLS} FROM users ORDER BY CASE role
+       WHEN 'CEO' THEN 0 WHEN 'MANAGER' THEN 1 WHEN 'TEAM_LEAD' THEN 2 ELSE 3 END, name`
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Tasks                                                               */
+/* ------------------------------------------------------------------ */
+
+async function hydrate(task: Task, depth = 1): Promise<TaskFull> {
+  const [tags, links, collaborators, commentRow, voiceNotes, progressUpdates] = await Promise.all([
+    many<Tag>(
+      `SELECT t.* FROM tags t JOIN task_tags tt ON tt.tag_id = t.id
+       WHERE tt.task_id = ? ORDER BY t.name`,
+      [task.id]
+    ),
+    many<TaskLink>('SELECT * FROM task_links WHERE task_id = ? ORDER BY position, id', [task.id]),
+    many<User>(
+      `SELECT u.id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at
+       FROM users u JOIN task_assignees ta ON ta.user_id = u.id
+       WHERE ta.task_id = ? ORDER BY u.name`,
+      [task.id]
+    ),
+    one<{ c: number }>('SELECT COUNT(*)::int AS c FROM comments WHERE task_id = ?', [task.id]),
+    // Only briefing notes here — the ones under comments travel with the comment.
+    listVoiceNotes({ taskId: task.id, onTaskOnly: true }),
+    listProgressUpdates(task.id),
+  ]);
+
+  const [creator, assignee, subtaskRows, parentRow] = await Promise.all([
+    getUser(task.creator_id),
+    getUser(task.assignee_id),
+    depth > 0
+      ? many<Task>(
+          'SELECT * FROM tasks WHERE parent_id = ? AND archived = 0 ORDER BY position, created_at',
+          [task.id]
+        )
+      : Promise.resolve([] as Task[]),
+    task.parent_id
+      ? one<{ title: string }>('SELECT title FROM tasks WHERE id = ?', [task.parent_id])
+      : Promise.resolve(null),
+  ]);
+
+  const subtasks = await Promise.all(subtaskRows.map((s) => hydrate(s, depth - 1)));
+
+  return {
+    ...task,
+    creator,
+    assignee,
+    collaborators,
+    tags,
+    links,
+    subtasks,
+    comment_count: commentRow?.c ?? 0,
+    voice_notes: voiceNotes,
+    progress_updates: progressUpdates,
+    parent_title: parentRow?.title ?? null,
+  };
+}
+
+export async function getTask(id: string): Promise<TaskFull | null> {
+  const row = await one<Task>('SELECT * FROM tasks WHERE id = ?', [id]);
+  return row ? hydrate(row) : null;
+}
+
+export interface TaskQuery {
+  archived?: boolean;
+  topLevelOnly?: boolean;
+  assigneeId?: string;
+  status?: Status;
+  search?: string;
+}
+
+export async function listTasks(q: TaskQuery = {}): Promise<TaskFull[]> {
+  const where: string[] = ['t.archived = ' + (q.archived ? 1 : 0)];
+  const params: unknown[] = [];
+  if (q.topLevelOnly) where.push('t.parent_id IS NULL');
+  if (q.status) {
+    where.push('t.status = ?');
+    params.push(q.status);
+  }
+  if (q.assigneeId) {
+    where.push(
+      '(t.assignee_id = ? OR EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id = t.id AND ta.user_id = ?))'
+    );
+    params.push(q.assigneeId, q.assigneeId);
+  }
+
+  const rows = await many<Task>(
+    `SELECT t.* FROM tasks t WHERE ${where.join(' AND ')} ORDER BY t.position, t.created_at DESC`,
+    params
+  );
+
+  let tasks = await Promise.all(rows.map((r) => hydrate(r)));
+
+  if (q.search && q.search.trim()) {
+    const needle = q.search.trim().toLowerCase();
+    tasks = tasks.filter(
+      (t) =>
+        t.title.toLowerCase().includes(needle) ||
+        docToPlain(t.description).toLowerCase().includes(needle) ||
+        String(t.seq).includes(needle) ||
+        t.tags.some((tag) => tag.name.toLowerCase().includes(needle))
+    );
+  }
+  return tasks;
+}
+
+export interface CreateTaskInput {
+  title: string;
+  description?: string;
+  status?: Status;
+  priority?: Priority;
+  assigneeId?: string | null;
+  parentId?: string | null;
+  dueDate?: number | null;
+  startDate?: number | null;
+  estimate?: number | null;
+  links?: { url: string; label?: string }[];
+  tagIds?: string[];
+}
+
+export async function createTask(
+  actor: User,
+  input: CreateTaskInput,
+  routedTo: string | null
+): Promise<TaskFull> {
+  const now = Date.now();
+  const id = newId('t_');
+  const seq = await nextTaskSeq();
+  const assignee = input.assigneeId !== undefined ? input.assigneeId : routedTo;
+  const title = input.title.trim() || 'Untitled';
+
+  const maxPos = await one<{ p: number }>('SELECT COALESCE(MAX(position), 0) AS p FROM tasks');
+
+  await run(
+    `INSERT INTO tasks
+       (id, seq, title, description, status, priority, creator_id, assignee_id, parent_id,
+        due_date, start_date, estimate, progress, position, archived, created_at, updated_at,
+        submitted_at, completed_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,0,?,?,NULL,NULL)`,
+    [
+      id, seq, title,
+      input.description ?? '[]',
+      input.status ?? 'TRIAGE',
+      input.priority ?? 'MEDIUM',
+      actor.id,
+      assignee ?? null,
+      input.parentId ?? null,
+      input.dueDate ?? null,
+      input.startDate ?? null,
+      input.estimate ?? null,
+      (maxPos?.p ?? 0) + 1000,
+      now, now,
+    ]
+  );
+
+  for (const [i, link] of (input.links ?? []).entries()) {
+    const url = normalizeUrl(link.url ?? '');
+    if (!url) continue; // drop unusable/unsafe links rather than reject the whole task
+    await run('INSERT INTO task_links (id, task_id, url, label, position) VALUES (?,?,?,?,?)', [
+      newId('l_'), id, url, (link.label ?? '').trim().slice(0, 120), i,
+    ]);
+  }
+  for (const tagId of input.tagIds ?? []) {
+    await run('INSERT INTO task_tags (task_id, tag_id) VALUES (?,?) ON CONFLICT DO NOTHING', [
+      id, tagId,
+    ]);
+  }
+
+  await logActivity(id, actor.id, 'created', {});
+  if (assignee && assignee !== actor.id) {
+    await logActivity(id, actor.id, 'assigned', { to: assignee });
+    await notify(assignee, actor.id, 'assigned', id, null, `${actor.name} assigned you "${title}"`);
+    void emailAssignment(actor, assignee, { id, seq, title });
+  }
+  publish({ type: 'task.created', taskId: id, actorId: actor.id });
+
+  return (await getTask(id))!;
+}
+
+export type TaskPatch = Partial<{
+  title: string;
+  description: string;
+  status: Status;
+  priority: Priority;
+  assignee_id: string | null;
+  due_date: number | null;
+  start_date: number | null;
+  estimate: number | null;
+  position: number;
+  archived: number;
+  parent_id: string | null;
+}>;
+
+const PATCHABLE = new Set([
+  'title', 'description', 'status', 'priority', 'assignee_id',
+  'due_date', 'start_date', 'estimate', 'position', 'archived', 'parent_id',
+]);
+
+const statusLabel = (s: Status) => s.replace('_', ' ').toLowerCase();
+
+export async function updateTask(
+  actor: User,
+  id: string,
+  patch: TaskPatch
+): Promise<TaskFull | null> {
+  const before = await one<Task>('SELECT * FROM tasks WHERE id = ?', [id]);
+  if (!before) return null;
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    if (!PATCHABLE.has(key) || value === undefined) continue;
+    sets.push(`${key} = ?`);
+    params.push(value);
+  }
+  if (!sets.length) return getTask(id);
+
+  // Completion and submission timestamps follow the status transition.
+  if (patch.status && patch.status !== before.status) {
+    sets.push('completed_at = ?');
+    params.push(patch.status === 'DONE' ? Date.now() : null);
+    sets.push('submitted_at = ?');
+    params.push(patch.status === 'SUBMITTED' ? Date.now() : null);
+    // Approving means finished, whatever the last report claimed.
+    if (patch.status === 'DONE') sets.push('progress = 100');
+  }
+
+  sets.push('updated_at = ?');
+  params.push(Date.now(), id);
+  await run(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`, params);
+
+  if (patch.status && patch.status !== before.status) {
+    await logActivity(id, actor.id, 'status', { from: before.status, to: patch.status });
+    const msg = `${actor.name} moved "${before.title}" to ${statusLabel(patch.status)}`;
+    if (before.assignee_id) await notify(before.assignee_id, actor.id, 'status', id, null, msg);
+    // creator_id is null once that person has been removed from the workspace.
+    if (before.creator_id && before.creator_id !== before.assignee_id) {
+      await notify(before.creator_id, actor.id, 'status', id, null, msg);
+    }
+  }
+  if (patch.assignee_id !== undefined && patch.assignee_id !== before.assignee_id) {
+    await logActivity(id, actor.id, 'assigned', { from: before.assignee_id, to: patch.assignee_id });
+    if (patch.assignee_id) {
+      await notify(patch.assignee_id, actor.id, 'assigned', id, null,
+        `${actor.name} assigned you "${before.title}"`);
+      void emailAssignment(actor, patch.assignee_id, { id, seq: before.seq, title: before.title });
+    }
+  }
+  if (patch.priority && patch.priority !== before.priority) {
+    await logActivity(id, actor.id, 'priority', { from: before.priority, to: patch.priority });
+  }
+  if (patch.due_date !== undefined && patch.due_date !== before.due_date) {
+    await logActivity(id, actor.id, 'due_date', { to: patch.due_date });
+  }
+  if (patch.archived === 1 && before.archived === 0) {
+    await logActivity(id, actor.id, 'archived', {});
+  }
+
+  publish({ type: 'task.updated', taskId: id, actorId: actor.id });
+  return getTask(id);
+}
+
+export async function deleteTask(id: string) {
+  await run('DELETE FROM tasks WHERE id = ?', [id]);
+  publish({ type: 'task.deleted', taskId: id });
+}
+
+/** Team Lead splits one task into several pieces, each handed to its own Dev. */
+export async function splitTask(
+  actor: User,
+  parentId: string,
+  pieces: { title: string; assigneeId: string | null; estimate?: number | null }[]
+): Promise<TaskFull | null> {
+  const parent = await one<Task>('SELECT * FROM tasks WHERE id = ?', [parentId]);
+  if (!parent) return null;
+
+  const base = await one<{ p: number }>(
+    'SELECT COALESCE(MAX(position), 0) AS p FROM tasks WHERE parent_id = ?',
+    [parentId]
+  );
+  const basePos = base?.p ?? 0;
+
+  let created = 0;
+  for (const [i, piece] of pieces.entries()) {
+    if (!piece.title.trim()) continue;
+    created += 1;
+
+    const now = Date.now();
+    const id = newId('t_');
+    const seq = await nextTaskSeq();
+    const title = piece.title.trim();
+
+    await run(
+      `INSERT INTO tasks (id, seq, title, description, status, priority, creator_id, assignee_id,
+                          parent_id, due_date, estimate, progress, position, archived, created_at, updated_at)
+       VALUES (?,?,?,'[]',?,?,?,?,?,?,?,0,?,0,?,?)`,
+      [
+        id, seq, title,
+        piece.assigneeId ? 'TODO' : 'TRIAGE',
+        parent.priority, actor.id, piece.assigneeId ?? null, parentId,
+        parent.due_date, piece.estimate ?? null, basePos + (i + 1) * 1000, now, now,
+      ]
+    );
+
+    if (piece.assigneeId) {
+      await run(
+        'INSERT INTO task_assignees (task_id, user_id) VALUES (?,?) ON CONFLICT DO NOTHING',
+        [parentId, piece.assigneeId]
+      );
+      await notify(piece.assigneeId, actor.id, 'assigned', id, null,
+        `${actor.name} assigned you "${title}" (split from "${parent.title}")`);
+      void emailAssignment(actor, piece.assigneeId, { id, seq, title });
+    }
+    await logActivity(id, actor.id, 'created', { split_from: parentId });
+  }
+
+  if (!created) return getTask(parentId);
+
+  await logActivity(parentId, actor.id, 'split', { count: created });
+  // The parent becomes a container tracked through its children.
+  await run(
+    `UPDATE tasks SET status = CASE WHEN status = 'TRIAGE' THEN 'IN_PROGRESS' ELSE status END,
+     updated_at = ? WHERE id = ?`,
+    [Date.now(), parentId]
+  );
+  publish({ type: 'task.updated', taskId: parentId, actorId: actor.id });
+  return getTask(parentId);
+}
+
+/* ------------------------------------------------------------------ */
+/* Links & tags                                                        */
+/* ------------------------------------------------------------------ */
+
+export async function addLink(taskId: string, url: string, label: string): Promise<TaskLink> {
+  const id = newId('l_');
+  const pos = await one<{ p: number }>(
+    'SELECT COALESCE(MAX(position), 0) AS p FROM task_links WHERE task_id = ?',
+    [taskId]
+  );
+  await run('INSERT INTO task_links (id, task_id, url, label, position) VALUES (?,?,?,?,?)', [
+    id, taskId, url, label, (pos?.p ?? 0) + 1,
+  ]);
+  return (await one<TaskLink>('SELECT * FROM task_links WHERE id = ?', [id]))!;
+}
+
+export async function getLink(id: string): Promise<TaskLink | null> {
+  return one<TaskLink>('SELECT * FROM task_links WHERE id = ?', [id]);
+}
+
+export async function removeLink(id: string) {
+  await run('DELETE FROM task_links WHERE id = ?', [id]);
+}
+
+export async function allTags(): Promise<Tag[]> {
+  return many<Tag>('SELECT * FROM tags ORDER BY name');
+}
+
+export async function upsertTag(name: string, color: string): Promise<Tag> {
+  const existing = await one<Tag>('SELECT * FROM tags WHERE name = ?', [name]);
+  if (existing) return existing;
+  const id = newId('g_');
+  await run('INSERT INTO tags (id, name, color) VALUES (?,?,?)', [id, name, color]);
+  return { id, name, color: color as Tag['color'] };
+}
+
+export async function setTaskTags(taskId: string, tagIds: string[]) {
+  await run('DELETE FROM task_tags WHERE task_id = ?', [taskId]);
+  for (const tagId of tagIds) {
+    await run('INSERT INTO task_tags (task_id, tag_id) VALUES (?,?) ON CONFLICT DO NOTHING', [
+      taskId, tagId,
+    ]);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Comments & mentions                                                 */
+/* ------------------------------------------------------------------ */
+
+const MENTION_RE = /@\[([^\]]+)\]\(([^)]+)\)/g;
+
+export async function listComments(taskId: string): Promise<Comment[]> {
+  const rows = await many<Comment>(
+    'SELECT * FROM comments WHERE task_id = ? ORDER BY created_at',
+    [taskId]
+  );
+  return Promise.all(
+    rows.map(async (c) => ({
+      ...c,
+      author: await getUser(c.author_id),
+      voice_notes: await listVoiceNotes({ commentId: c.id }),
+    }))
+  );
+}
+
+export async function addComment(actor: User, taskId: string, body: string): Promise<Comment> {
+  const id = newId('c_');
+  const now = Date.now();
+  await run(
+    'INSERT INTO comments (id, task_id, author_id, body, resolved, created_at, updated_at) VALUES (?,?,?,?,0,?,?)',
+    [id, taskId, actor.id, body, now, now]
+  );
+
+  const task = await one<{ title: string; assignee_id: string | null; creator_id: string }>(
+    'SELECT title, assignee_id, creator_id FROM tasks WHERE id = ?',
+    [taskId]
+  );
+  const title = task ? task.title : 'a task';
+
+  const notified = new Set<string>([actor.id]);
+
+  // Explicit @mentions take precedence over the implicit participant fan-out.
+  for (const match of body.matchAll(MENTION_RE)) {
+    const userId = match[2];
+    if (notified.has(userId)) continue;
+    notified.add(userId);
+    await notify(userId, actor.id, 'mention', taskId, id, `${actor.name} mentioned you on "${title}"`);
+  }
+  for (const participant of [task?.assignee_id, task?.creator_id]) {
+    if (!participant || notified.has(participant)) continue;
+    notified.add(participant);
+    await notify(participant, actor.id, 'comment', taskId, id, `${actor.name} commented on "${title}"`);
+  }
+
+  await logActivity(taskId, actor.id, 'commented', {});
+  publish({ type: 'comment.added', taskId, actorId: actor.id });
+
+  const row = (await one<Comment>('SELECT * FROM comments WHERE id = ?', [id]))!;
+  return { ...row, author: actor, voice_notes: await listVoiceNotes({ commentId: id }) };
+}
+
+export async function getComment(id: string): Promise<Comment | null> {
+  return one<Comment>('SELECT * FROM comments WHERE id = ?', [id]);
+}
+
+export async function deleteComment(id: string) {
+  const row = await one<{ task_id: string }>('SELECT task_id FROM comments WHERE id = ?', [id]);
+  await run('DELETE FROM comments WHERE id = ?', [id]);
+  publish({ type: 'comment.removed', taskId: row?.task_id ?? null });
+}
+
+export async function setCommentResolved(id: string, resolved: boolean) {
+  await run('UPDATE comments SET resolved = ?, updated_at = ? WHERE id = ?', [
+    resolved ? 1 : 0, Date.now(), id,
+  ]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Notifications & activity                                            */
+/* ------------------------------------------------------------------ */
+
+export async function notify(
+  userId: string, actorId: string | null, type: string,
+  taskId: string | null, commentId: string | null, message: string
+) {
+  if (userId === actorId) return;
+  await run(
+    `INSERT INTO notifications (id, user_id, actor_id, type, task_id, comment_id, message, read, created_at)
+     VALUES (?,?,?,?,?,?,?,0,?)`,
+    [newId('n_'), userId, actorId, type, taskId, commentId, message, Date.now()]
+  );
+  publish({ type: 'notification', taskId, userId, actorId });
+}
+
+export async function listNotifications(userId: string, limit = 60): Promise<Notification[]> {
+  const rows = await many<Notification>(
+    `SELECT n.*, t.title AS task_title, t.seq AS task_seq FROM notifications n
+     LEFT JOIN tasks t ON t.id = n.task_id
+     WHERE n.user_id = ? ORDER BY n.created_at DESC LIMIT ?`,
+    [userId, limit]
+  );
+  return Promise.all(rows.map(async (n) => ({ ...n, actor: await getUser(n.actor_id) })));
+}
+
+export async function markNotifications(userId: string, ids: string[] | 'all') {
+  if (ids === 'all') {
+    await run('UPDATE notifications SET read = 1 WHERE user_id = ?', [userId]);
+    return;
+  }
+  for (const id of ids) {
+    await run('UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+}
+
+export async function logActivity(
+  taskId: string, actorId: string | null, type: string, meta: unknown
+) {
+  await run('INSERT INTO activity (id, task_id, actor_id, type, meta, created_at) VALUES (?,?,?,?,?,?)', [
+    newId('a_'), taskId, actorId, type, JSON.stringify(meta ?? {}), Date.now(),
+  ]);
+}
+
+export async function listActivity(taskId: string): Promise<ActivityItem[]> {
+  const rows = await many<ActivityItem>(
+    'SELECT * FROM activity WHERE task_id = ? ORDER BY created_at DESC LIMIT 100',
+    [taskId]
+  );
+  return Promise.all(rows.map(async (a) => ({ ...a, actor: await getUser(a.actor_id) })));
+}
+
+/* ------------------------------------------------------------------ */
+/* Voice notes                                                         */
+/* ------------------------------------------------------------------ */
+
+const VOICE_COLS = 'id, task_id, comment_id, author_id, mime, duration_ms, byte_size, created_at';
+
+export interface VoiceNoteQuery {
+  taskId?: string;
+  commentId?: string;
+  /** Restrict to notes on the brief itself, excluding ones under comments. */
+  onTaskOnly?: boolean;
+}
+
+/** Metadata only — the audio itself is streamed by getVoiceNoteData. */
+export async function listVoiceNotes(q: VoiceNoteQuery): Promise<VoiceNote[]> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (q.taskId) { where.push('task_id = ?'); params.push(q.taskId); }
+  if (q.commentId) { where.push('comment_id = ?'); params.push(q.commentId); }
+  if (q.onTaskOnly) where.push('comment_id IS NULL');
+  if (!where.length) return [];
+
+  const rows = await many<VoiceNote>(
+    `SELECT ${VOICE_COLS} FROM voice_notes WHERE ${where.join(' AND ')} ORDER BY created_at`,
+    params
+  );
+  return Promise.all(rows.map(async (v) => ({ ...v, author: await getUser(v.author_id) })));
+}
+
+export async function getVoiceNote(id: string): Promise<VoiceNote | null> {
+  const row = await one<VoiceNote>(`SELECT ${VOICE_COLS} FROM voice_notes WHERE id = ?`, [id]);
+  return row ? { ...row, author: await getUser(row.author_id) } : null;
+}
+
+export async function getVoiceNoteData(
+  id: string
+): Promise<{ mime: string; data: Uint8Array } | null> {
+  return one<{ mime: string; data: Uint8Array }>(
+    'SELECT mime, data FROM voice_notes WHERE id = ?',
+    [id]
+  );
+}
+
+export async function addVoiceNote(input: {
+  taskId: string;
+  commentId: string | null;
+  authorId: string;
+  mime: string;
+  durationMs: number;
+  data: Buffer;
+}): Promise<VoiceNote> {
+  const id = newId('v_');
+  await run(
+    `INSERT INTO voice_notes (id, task_id, comment_id, author_id, mime, duration_ms, byte_size, data, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [
+      id, input.taskId, input.commentId, input.authorId, input.mime,
+      Math.max(0, Math.round(input.durationMs)), input.data.byteLength, input.data, Date.now(),
+    ]
+  );
+  publish({ type: 'voice.added', taskId: input.taskId, actorId: input.authorId });
+  return (await getVoiceNote(id))!;
+}
+
+export async function deleteVoiceNote(id: string) {
+  const row = await one<{ task_id: string }>('SELECT task_id FROM voice_notes WHERE id = ?', [id]);
+  await run('DELETE FROM voice_notes WHERE id = ?', [id]);
+  publish({ type: 'voice.removed', taskId: row?.task_id ?? null });
+}
+
+/* ------------------------------------------------------------------ */
+/* Progress reports & the review workflow                              */
+/* ------------------------------------------------------------------ */
+
+const PROGRESS_COLS =
+  'id, task_id, author_id, kind, percent, done_summary, remaining, blockers, hours_spent, created_at';
+
+export async function listProgressUpdates(taskId: string): Promise<ProgressUpdate[]> {
+  const rows = await many<ProgressUpdate>(
+    `SELECT ${PROGRESS_COLS} FROM progress_updates WHERE task_id = ? ORDER BY created_at DESC`,
+    [taskId]
+  );
+  return Promise.all(rows.map(async (r) => ({ ...r, author: await getUser(r.author_id) })));
+}
+
+export interface ProgressInput {
+  percent?: number;
+  doneSummary?: string;
+  remaining?: string;
+  blockers?: string;
+  hoursSpent?: number | null;
+}
+
+const clampPercent = (n: unknown) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
+
+export async function addProgressUpdate(
+  actor: User,
+  taskId: string,
+  kind: ProgressKind,
+  input: ProgressInput
+): Promise<ProgressUpdate> {
+  const id = newId('p_');
+  const percent = clampPercent(input.percent);
+
+  await run(
+    `INSERT INTO progress_updates
+       (id, task_id, author_id, kind, percent, done_summary, remaining, blockers, hours_spent, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [
+      id, taskId, actor.id, kind, percent,
+      (input.doneSummary ?? '').trim().slice(0, 4000),
+      (input.remaining ?? '').trim().slice(0, 4000),
+      (input.blockers ?? '').trim().slice(0, 2000),
+      input.hoursSpent ?? null,
+      Date.now(),
+    ]
+  );
+
+  // A reviewer's verdict must not rewrite the developer's own percentage.
+  if (kind === 'update' || kind === 'submitted') {
+    await run('UPDATE tasks SET progress = ?, updated_at = ? WHERE id = ?', [
+      percent, Date.now(), taskId,
+    ]);
+  }
+
+  await logActivity(taskId, actor.id, `progress_${kind}`, { percent });
+  publish({ type: 'progress.added', taskId, actorId: actor.id });
+
+  const row = (await one<ProgressUpdate>(
+    `SELECT ${PROGRESS_COLS} FROM progress_updates WHERE id = ?`,
+    [id]
+  ))!;
+  return { ...row, author: actor };
+}
+
+/** Dev hands the task to a lead. Nobody but a reviewer can close it. */
+export async function submitForReview(
+  actor: User,
+  taskId: string,
+  input: ProgressInput
+): Promise<TaskFull | null> {
+  const task = await one<Task>('SELECT * FROM tasks WHERE id = ?', [taskId]);
+  if (!task) return null;
+
+  await addProgressUpdate(actor, taskId, 'submitted', { ...input, percent: input.percent ?? 100 });
+  await updateTask(actor, taskId, { status: 'SUBMITTED' });
+
+  const reviewers = await many<{ id: string }>(
+    `SELECT id FROM users WHERE role IN ('TEAM_LEAD','CEO')`
+  );
+  for (const r of reviewers) {
+    await notify(r.id, actor.id, 'review_requested', taskId, null,
+      `${actor.name} submitted "${task.title}" for review`);
+  }
+
+  return getTask(taskId);
+}
+
+export async function approveSubmission(
+  actor: User,
+  taskId: string,
+  note: string
+): Promise<TaskFull | null> {
+  const task = await one<Task>('SELECT * FROM tasks WHERE id = ?', [taskId]);
+  if (!task) return null;
+
+  await addProgressUpdate(actor, taskId, 'approved', { percent: 100, doneSummary: note });
+  await updateTask(actor, taskId, { status: 'DONE' });
+
+  if (task.assignee_id) {
+    await notify(task.assignee_id, actor.id, 'approved', taskId, null,
+      `${actor.name} approved "${task.title}" — it is done`);
+  }
+  if (task.creator_id && task.creator_id !== task.assignee_id) {
+    await notify(task.creator_id, actor.id, 'approved', taskId, null,
+      `${actor.name} approved "${task.title}"`);
+  }
+
+  return getTask(taskId);
+}
+
+export async function requestChanges(
+  actor: User,
+  taskId: string,
+  note: string
+): Promise<TaskFull | null> {
+  const task = await one<Task>('SELECT * FROM tasks WHERE id = ?', [taskId]);
+  if (!task) return null;
+
+  await addProgressUpdate(actor, taskId, 'changes_requested', {
+    percent: task.progress,
+    remaining: note,
+  });
+  await updateTask(actor, taskId, { status: 'CHANGES_REQUESTED' });
+
+  if (task.assignee_id) {
+    await notify(task.assignee_id, actor.id, 'changes_requested', taskId, null,
+      `${actor.name} asked for changes on "${task.title}"`);
+  }
+
+  return getTask(taskId);
+}
+
+/* ------------------------------------------------------------------ */
+/* Developer task sheet                                                */
+/* ------------------------------------------------------------------ */
+
+interface SheetRow extends Task {
+  parent_title: string | null;
+  comment_count: number;
+  assigned_by: string | null;
+}
+
+async function toSheetEntry(row: SheetRow): Promise<SheetEntry> {
+  const turnaround = row.completed_at ? row.completed_at - row.created_at : null;
+  const onTime =
+    row.completed_at && row.due_date ? row.completed_at <= row.due_date + 86_400_000 : null;
+
+  return {
+    id: row.id,
+    seq: row.seq,
+    title: row.title,
+    status: row.status,
+    priority: row.priority,
+    parent_title: row.parent_title,
+    tags: await many<Tag>(
+      'SELECT t.* FROM tags t JOIN task_tags tt ON tt.tag_id = t.id WHERE tt.task_id = ? ORDER BY t.name',
+      [row.id]
+    ),
+    created_at: row.created_at,
+    completed_at: row.completed_at,
+    due_date: row.due_date,
+    turnaround_ms: turnaround,
+    on_time: onTime,
+    comment_count: row.comment_count,
+    assigned_by: row.assigned_by,
+  };
+}
+
+export async function taskSheet(userId: string): Promise<TaskSheet | null> {
+  const user = await getUser(userId);
+  if (!user) return null;
+
+  const rows = await many<SheetRow>(
+    `SELECT t.*,
+            (SELECT p.title FROM tasks p WHERE p.id = t.parent_id)                   AS parent_title,
+            (SELECT COUNT(*)::int FROM comments c WHERE c.task_id = t.id)            AS comment_count,
+            (SELECT u.name FROM users u WHERE u.id = (
+               SELECT a.actor_id FROM activity a
+               WHERE a.task_id = t.id AND a.type = 'assigned'
+               ORDER BY a.created_at DESC LIMIT 1))                                  AS assigned_by
+     FROM tasks t
+     WHERE t.archived = 0
+       AND (t.assignee_id = ?
+            OR EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id = t.id AND ta.user_id = ?))
+     ORDER BY COALESCE(t.completed_at, t.updated_at) DESC`,
+    [userId, userId]
+  );
+
+  const entries = await Promise.all(rows.map(toSheetEntry));
+  const completed = entries.filter((e) => e.status === 'DONE');
+  const active = entries.filter((e) => e.status !== 'DONE');
+
+  const now = Date.now();
+  const since = (days: number) => now - days * 86_400_000;
+
+  const rated = completed.filter((e) => e.on_time !== null);
+  const turnarounds = completed
+    .map((e) => e.turnaround_ms)
+    .filter((v): v is number => v !== null)
+    .sort((a, b) => a - b);
+
+  return {
+    user,
+    completed,
+    active,
+    stats: {
+      completed_total: completed.length,
+      completed_7d: completed.filter((e) => (e.completed_at ?? 0) >= since(7)).length,
+      completed_30d: completed.filter((e) => (e.completed_at ?? 0) >= since(30)).length,
+      active_total: active.length,
+      overdue: active.filter((e) => e.due_date !== null && e.due_date < now).length,
+      on_time_rate: rated.length ? rated.filter((e) => e.on_time).length / rated.length : null,
+      median_turnaround_ms: turnarounds.length ? turnarounds[Math.floor(turnarounds.length / 2)] : null,
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Outbound email                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Tells a developer work has landed on them. Fire-and-forget: the assignment is
+ * already committed, so a mail failure must not surface as a failed request.
+ */
+export async function emailAssignment(
+  actor: User,
+  assigneeId: string,
+  task: { id: string; seq: number; title: string }
+) {
+  if (assigneeId === actor.id) return;
+  const assignee = await getUser(assigneeId);
+  if (!assignee) return;
+
+  await sendMail({
+    to: assignee.email,
+    subject: `${actor.name} assigned you TSK-${task.seq}: ${task.title}`,
+    heading: 'A task was assigned to you',
+    body: `${actor.name} assigned you "${task.title}" (TSK-${task.seq}).\n\nOpen it to see the brief, report progress, and submit it for review when it is ready.`,
+    action: { label: 'Open the task', url: `${appUrl}/workspace?task=${task.id}` },
+    footer: 'You are receiving this because the task was assigned to you in Flow.',
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Password reset                                                      */
+/* ------------------------------------------------------------------ */
+
+const RESET_TTL_MS = 1000 * 60 * 60; // one hour
+
+export async function createPasswordReset(
+  email: string
+): Promise<{ user: User; token: string } | null> {
+  const user = await getUserByEmail(email);
+  if (!user) return null;
+
+  const token = newId('r_') + newId('');
+
+  // Any older link for this person stops working the moment a new one is made.
+  await run('DELETE FROM password_resets WHERE user_id = ?', [user.id]);
+  await run(
+    'INSERT INTO password_resets (token, user_id, expires_at, used_at, created_at) VALUES (?,?,?,NULL,?)',
+    [token, user.id, Date.now() + RESET_TTL_MS, Date.now()]
+  );
+
+  return { user, token };
+}
+
+export async function consumePasswordReset(token: string, passwordHash: string): Promise<boolean> {
+  const row = await one<{ user_id: string; expires_at: number; used_at: number | null }>(
+    'SELECT user_id, expires_at, used_at FROM password_resets WHERE token = ?',
+    [token]
+  );
+  if (!row || row.used_at || row.expires_at < Date.now()) return false;
+
+  await tx(async (t) => {
+    await t.run('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, row.user_id]);
+    await t.run('UPDATE password_resets SET used_at = ? WHERE token = ?', [Date.now(), token]);
+    // Changing a password signs every existing session out.
+    await t.run('DELETE FROM sessions WHERE user_id = ?', [row.user_id]);
+  });
+
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Offboarding                                                         */
+/* ------------------------------------------------------------------ */
+
+export interface RemovalSummary {
+  name: string;
+  email: string;
+  /** Open tasks that were handed back to a Team Lead. */
+  reassigned: number;
+}
+
+/**
+ * Removes someone who has left, without erasing what they did.
+ *
+ * Their open work is routed back to a Team Lead rather than silently
+ * disappearing, and the account row is deleted. Foreign keys are ON DELETE SET
+ * NULL for authorship, so their tasks, comments, recordings and progress
+ * reports all survive and simply read "Removed user".
+ */
+export async function removeUser(actor: User, targetId: string): Promise<RemovalSummary | null> {
+  const target = await getUser(targetId);
+  if (!target) return null;
+
+  // Hand back anything still open so no work is orphaned by the departure.
+  const open = await many<{ id: string; title: string }>(
+    `SELECT id, title FROM tasks
+     WHERE assignee_id = ? AND status != 'DONE' AND archived = 0`,
+    [targetId]
+  );
+
+  const lead = await one<{ id: string }>(
+    `SELECT id FROM users WHERE role = 'TEAM_LEAD' AND id != ?
+     ORDER BY created_at ASC LIMIT 1`,
+    [targetId]
+  );
+  const fallback = lead?.id ?? (actorCanHold(actor) ? actor.id : null);
+
+  for (const task of open) {
+    await run(
+      `UPDATE tasks SET assignee_id = ?, status = 'TRIAGE', updated_at = ? WHERE id = ?`,
+      [fallback, Date.now(), task.id]
+    );
+    await logActivity(task.id, actor.id, 'reassigned_on_offboard', {
+      from: target.name,
+      reason: 'account removed',
+    });
+    if (fallback && fallback !== actor.id) {
+      await notify(fallback, actor.id, 'assigned', task.id, null,
+        `"${task.title}" came back to triage — ${target.name} was removed from the workspace`);
+    }
+  }
+
+  await run('DELETE FROM users WHERE id = ?', [targetId]);
+  publish({ type: 'task.updated', taskId: null, actorId: actor.id });
+
+  return { name: target.name, email: target.email, reassigned: open.length };
+}
+
+/** A Lead or the CEO can hold triage; a Manager cannot. */
+const actorCanHold = (u: User) => u.role === 'TEAM_LEAD' || u.role === 'CEO';
+
+export async function countByRole(role: string): Promise<number> {
+  const row = await one<{ c: number }>('SELECT COUNT(*)::int AS c FROM users WHERE role = ?', [role]);
+  return row?.c ?? 0;
+}
