@@ -1,9 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Mic, Pause, Play, Square, Trash2, Volume2 } from 'lucide-react';
+import {
+  AlertCircle, Captions, Loader2, Mic, Pause, Play, RefreshCw, Square, Trash2, Volume2,
+} from 'lucide-react';
 import type { User, VoiceNote } from '@/lib/types';
 import { api } from '@/lib/client';
+import { autoTranscribe, transcriptionSupported, useTranscriber } from '@/lib/useTranscriber';
 import { Avatar } from './ui';
 import { timeAgo } from './views/shared';
 
@@ -187,16 +190,41 @@ export function VoiceNotePlayer({
   me,
   onDelete,
   showAuthor = true,
+  onTranscriptChange,
 }: {
   note: VoiceNote;
   me: User;
   onDelete?: (id: string) => void;
   showAuthor?: boolean;
+  /** Called once this note's own transcription attempt finishes, so a parent
+   *  list can refresh without waiting on the next live event. */
+  onTranscriptChange?: () => void;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [current, setCurrent] = useState(0);
+  const [manualBusy, setManualBusy] = useState(false);
+  const { transcribe } = useTranscriber();
+
+  /**
+   * Fills in a transcript for a note that never got one automatically — the
+   * recorder's tab closed too soon, or this browser doesn't support the
+   * feature and it fell to whoever opens the note next. Fetches the audio
+   * fresh via the normal playback endpoint rather than needing the original
+   * recording Blob, so any viewer with access can do this, not just the author.
+   */
+  const runManualTranscription = useCallback(async () => {
+    setManualBusy(true);
+    try {
+      const res = await fetch(api.voice.src(note.id));
+      const blob = await res.blob();
+      await autoTranscribe(note.id, blob, transcribe);
+      onTranscriptChange?.();
+    } finally {
+      setManualBusy(false);
+    }
+  }, [note.id, transcribe, onTranscriptChange]);
 
   const toggle = () => {
     const el = audioRef.current;
@@ -222,70 +250,141 @@ export function VoiceNotePlayer({
   const totalMs = note.duration_ms || (audioRef.current?.duration ?? 0) * 1000;
 
   return (
-    <div className="flex items-center gap-2 rounded-md border px-2 py-1.5" style={{ background: 'var(--bg-subtle)' }}>
-      <audio
-        ref={audioRef}
-        src={api.voice.src(note.id)}
-        preload="metadata"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => {
-          setPlaying(false);
-          setProgress(0);
-          setCurrent(0);
-        }}
-        onTimeUpdate={(e) => {
-          const el = e.currentTarget;
-          setCurrent(el.currentTime * 1000);
-          if (Number.isFinite(el.duration) && el.duration > 0) {
-            setProgress((el.currentTime / el.duration) * 100);
-          }
-        }}
-      />
+    <div className="rounded-md border px-2 py-1.5" style={{ background: 'var(--bg-subtle)' }}>
+      <div className="flex items-center gap-2">
+        <audio
+          ref={audioRef}
+          src={api.voice.src(note.id)}
+          preload="metadata"
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => {
+            setPlaying(false);
+            setProgress(0);
+            setCurrent(0);
+          }}
+          onTimeUpdate={(e) => {
+            const el = e.currentTarget;
+            setCurrent(el.currentTime * 1000);
+            if (Number.isFinite(el.duration) && el.duration > 0) {
+              setProgress((el.currentTime / el.duration) * 100);
+            }
+          }}
+        />
 
-      <button
-        onClick={toggle}
-        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-white"
-        style={{ background: 'var(--accent)' }}
-        aria-label={playing ? 'Pause' : 'Play voice note'}
-      >
-        {playing ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" className="ml-px" />}
-      </button>
-
-      {showAuthor && <Avatar user={note.author} size="xs" />}
-
-      <div className="min-w-0 flex-1">
-        <div
-          onClick={scrub}
-          className="h-1.5 cursor-pointer overflow-hidden rounded-full"
-          style={{ background: 'var(--bg-active)' }}
-          role="progressbar"
-          aria-valuenow={Math.round(progress)}
-          aria-valuemin={0}
-          aria-valuemax={100}
+        <button
+          onClick={toggle}
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-white"
+          style={{ background: 'var(--accent)' }}
+          aria-label={playing ? 'Pause' : 'Play voice note'}
         >
-          <div className="h-full rounded-full" style={{ width: `${progress}%`, background: 'var(--accent)' }} />
+          {playing ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" className="ml-px" />}
+        </button>
+
+        {showAuthor && <Avatar user={note.author} size="xs" />}
+
+        <div className="min-w-0 flex-1">
+          <div
+            onClick={scrub}
+            className="h-1.5 cursor-pointer overflow-hidden rounded-full"
+            style={{ background: 'var(--bg-active)' }}
+            role="progressbar"
+            aria-valuenow={Math.round(progress)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="h-full rounded-full" style={{ width: `${progress}%`, background: 'var(--accent)' }} />
+          </div>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-[var(--text-tertiary)]">
+            <Volume2 size={9} />
+            <span className="tabular-nums">
+              {formatDuration(playing || current ? current : totalMs)}
+              {(playing || current > 0) && totalMs > 0 && ` / ${formatDuration(totalMs)}`}
+            </span>
+            {showAuthor && note.author && <span className="truncate">· {note.author.name}</span>}
+            <span>· {timeAgo(note.created_at)}</span>
+          </div>
         </div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-[var(--text-tertiary)]">
-          <Volume2 size={9} />
-          <span className="tabular-nums">
-            {formatDuration(playing || current ? current : totalMs)}
-            {(playing || current > 0) && totalMs > 0 && ` / ${formatDuration(totalMs)}`}
-          </span>
-          {showAuthor && note.author && <span className="truncate">· {note.author.name}</span>}
-          <span>· {timeAgo(note.created_at)}</span>
-        </div>
+
+        {canDelete && (
+          <button
+            onClick={() => onDelete!(note.id)}
+            className="shrink-0 rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-red-500"
+            aria-label="Delete voice note"
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
       </div>
 
-      {canDelete && (
-        <button
-          onClick={() => onDelete!(note.id)}
-          className="shrink-0 rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-red-500"
-          aria-label="Delete voice note"
-        >
-          <Trash2 size={12} />
-        </button>
-      )}
+      <TranscriptRow note={note} busy={manualBusy} onRetry={runManualTranscription} />
+    </div>
+  );
+}
+
+/** The transcript itself, or whatever state getting one is currently in. */
+function TranscriptRow({
+  note,
+  busy,
+  onRetry,
+}: {
+  note: VoiceNote;
+  busy: boolean;
+  onRetry: () => void;
+}) {
+  if (note.transcript_status === 'done' && note.transcript) {
+    return (
+      <p className="mt-1.5 flex items-start gap-1.5 border-t pt-1.5 text-[12px] leading-snug text-[var(--text-secondary)]">
+        <Captions size={12} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
+        <span className="min-w-0 flex-1">
+          {note.transcript}
+          {note.transcript_lang === 'ur' && (
+            <span
+              className="ml-1.5 inline-block rounded px-1 align-middle text-[9.5px] font-semibold"
+              style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
+              title="Transcribed from Urdu speech and written in Roman letters"
+            >
+              Roman Urdu
+            </span>
+          )}
+        </span>
+      </p>
+    );
+  }
+
+  if (note.transcript_status === 'pending') {
+    return (
+      <p className="mt-1.5 flex items-center gap-1.5 border-t pt-1.5 text-[11.5px] text-[var(--text-tertiary)]">
+        <Loader2 size={11} className="animate-spin" /> Transcribing…
+      </p>
+    );
+  }
+
+  if (!transcriptionSupported()) return null;
+
+  // status is 'none' or 'failed' — offer to (re)try. Silent by default so a
+  // page full of old, never-transcribed notes doesn't turn into a wall of
+  // buttons; this only shows once someone asks.
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5 border-t pt-1.5">
+      <button
+        onClick={onRetry}
+        disabled={busy}
+        className="flex items-center gap-1 text-[11.5px] text-[var(--text-tertiary)] hover:text-[var(--text)]"
+      >
+        {busy ? (
+          <Loader2 size={11} className="animate-spin" />
+        ) : note.transcript_status === 'failed' ? (
+          <AlertCircle size={11} />
+        ) : (
+          <RefreshCw size={11} />
+        )}
+        {busy
+          ? 'Transcribing… (first time may download a small speech model)'
+          : note.transcript_status === 'failed'
+            ? 'Transcription failed — try again'
+            : 'Transcribe'}
+      </button>
     </div>
   );
 }
@@ -299,11 +398,13 @@ export function VoiceNoteList({
   me,
   onDelete,
   emptyHint,
+  onTranscriptChange,
 }: {
   notes: VoiceNote[];
   me: User;
   onDelete?: (id: string) => void;
   emptyHint?: string;
+  onTranscriptChange?: () => void;
 }) {
   if (!notes.length) {
     return emptyHint ? <p className="text-[12.5px] text-[var(--text-tertiary)]">{emptyHint}</p> : null;
@@ -311,7 +412,13 @@ export function VoiceNoteList({
   return (
     <div className="space-y-1.5">
       {notes.map((note) => (
-        <VoiceNotePlayer key={note.id} note={note} me={me} onDelete={onDelete} />
+        <VoiceNotePlayer
+          key={note.id}
+          note={note}
+          me={me}
+          onDelete={onDelete}
+          onTranscriptChange={onTranscriptChange}
+        />
       ))}
     </div>
   );

@@ -7,6 +7,7 @@ import { emptyDoc } from '@/lib/types';
 import { api, serializeDoc } from '@/lib/client';
 import { Modal, PriorityPicker, TagChip } from './ui';
 import { VoiceRecorder } from './VoiceNotes';
+import { autoTranscribe, useTranscriber } from '@/lib/useTranscriber';
 import BlockEditor from './BlockEditor';
 import { fromDateInput } from './views/shared';
 
@@ -31,6 +32,7 @@ export default function NewTaskModal({
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const { transcribe } = useTranscriber();
 
   // Routing is not a choice: it always goes to a Team Lead for triage.
   const routingLead =
@@ -70,7 +72,8 @@ export default function NewTaskModal({
 
       // Voice notes need a task id, so they follow immediately after creation.
       for (const rec of pending) {
-        await api.voice.upload(task.id, rec.blob, rec.durationMs);
+        const { voiceNote } = await api.voice.upload(task.id, rec.blob, rec.durationMs);
+        void autoTranscribe(voiceNote.id, rec.blob, transcribe);
       }
 
       onCreated(task, routedTo);

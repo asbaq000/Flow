@@ -17,6 +17,7 @@ import BlockEditor from './BlockEditor';
 import CommentThread from './CommentThread';
 import ProgressPanel from './ProgressPanel';
 import { VoiceNoteList, VoiceRecorder } from './VoiceNotes';
+import { autoTranscribe, useTranscriber } from '@/lib/useTranscriber';
 import { formatDateTime, fromDateInput, timeAgo, toDateInput } from './views/shared';
 
 type Tab = 'description' | 'links' | 'activity';
@@ -132,10 +133,16 @@ export default function TaskPanel({
         if (event.taskId && event.taskId !== taskId) return;
         if (event.type === 'comment.added' || event.type === 'comment.removed' ||
             event.type === 'progress.added' || event.type === 'voice.added' ||
-            event.type === 'voice.removed') {
+            event.type === 'voice.removed' || event.type === 'voice.transcribed') {
           refreshCollab();
         }
-        if (event.type === 'task.updated' || event.type === 'progress.added') {
+        if (event.type === 'task.updated' || event.type === 'progress.added' ||
+            // task.voice_notes (the brief's own recordings, as opposed to a
+            // comment's) only comes back from this call — refreshCollab alone
+            // would leave a note added or transcribed by someone else stuck
+            // on stale data.
+            event.type === 'voice.added' || event.type === 'voice.removed' ||
+            event.type === 'voice.transcribed') {
           refreshTaskMeta();
         }
       },
@@ -216,13 +223,16 @@ export default function TaskPanel({
   // Work only ever flows down to Developers, so they are the only choices offered.
   const assignableUsers = useMemo(() => users.filter((u) => isAssignableRole(u.role)), [users]);
 
+  const { transcribe } = useTranscriber();
+
   const uploadTaskVoice = useCallback(
     async (blob: Blob, durationMs: number) => {
       if (!task) return;
-      await api.voice.upload(task.id, blob, durationMs);
+      const { voiceNote } = await api.voice.upload(task.id, blob, durationMs);
+      void autoTranscribe(voiceNote.id, blob, transcribe);
       await load();
     },
-    [task, load]
+    [task, load, transcribe]
   );
 
   const removeVoice = useCallback(
@@ -579,6 +589,7 @@ export default function TaskPanel({
                           notes={task.voice_notes}
                           me={me}
                           onDelete={removeVoice}
+                          onTranscriptChange={refreshTaskMeta}
                           emptyHint={
                             abilities?.voiceOnTask
                               ? 'Nothing recorded yet. Explain it out loud when typing is slower.'
@@ -633,7 +644,8 @@ export default function TaskPanel({
                     const { comment } = await api.comments.add(task.id, body);
                     // The recording needs the comment id, so it is uploaded second.
                     if (voice) {
-                      await api.voice.upload(task.id, voice.blob, voice.durationMs, comment.id);
+                      const { voiceNote } = await api.voice.upload(task.id, voice.blob, voice.durationMs, comment.id);
+                      void autoTranscribe(voiceNote.id, voice.blob, transcribe);
                     }
                     const fresh = await api.tasks.get(task.id);
                     setComments(fresh.comments);
@@ -648,6 +660,7 @@ export default function TaskPanel({
                     await api.comments.setResolved(id, resolved);
                     setComments((prev) => prev.map((c) => (c.id === id ? { ...c, resolved: resolved ? 1 : 0 } : c)));
                   }}
+                  onTranscriptChange={refreshCollab}
                   onDeleteVoice={async (id) => {
                     await api.voice.remove(id);
                     const fresh = await api.tasks.get(task.id);

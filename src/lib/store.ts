@@ -527,7 +527,9 @@ export async function listActivity(taskId: string): Promise<ActivityItem[]> {
 /* Voice notes                                                         */
 /* ------------------------------------------------------------------ */
 
-const VOICE_COLS = 'id, task_id, comment_id, author_id, mime, duration_ms, byte_size, created_at';
+const VOICE_COLS =
+  'id, task_id, comment_id, author_id, mime, duration_ms, byte_size, created_at, ' +
+  'transcript, transcript_lang, transcript_status';
 
 export interface VoiceNoteQuery {
   taskId?: string;
@@ -591,6 +593,42 @@ export async function deleteVoiceNote(id: string) {
   const row = await one<{ task_id: string }>('SELECT task_id FROM voice_notes WHERE id = ?', [id]);
   await run('DELETE FROM voice_notes WHERE id = ?', [id]);
   publish({ type: 'voice.removed', taskId: row?.task_id ?? null });
+}
+
+/* ---------- transcription ---------- */
+
+/**
+ * Claims a note for transcription so two browsers opening the same task at
+ * once don't both spend CPU (and, for the uploader, mobile battery)
+ * transcribing the same recording. `RETURNING id` doubles as the "did this
+ * actually match a row" check — no separate rowcount plumbing needed.
+ */
+export async function claimVoiceTranscription(id: string): Promise<boolean> {
+  const row = await one<{ id: string }>(
+    `UPDATE voice_notes SET transcript_status = 'pending'
+     WHERE id = ? AND transcript_status IN ('none', 'failed')
+     RETURNING id`,
+    [id]
+  );
+  return !!row;
+}
+
+export async function setVoiceTranscript(
+  id: string,
+  patch: { status: 'done'; transcript: string; lang: string | null } | { status: 'failed' | 'none' }
+): Promise<VoiceNote | null> {
+  if (patch.status === 'done') {
+    await run(
+      'UPDATE voice_notes SET transcript_status = ?, transcript = ?, transcript_lang = ? WHERE id = ?',
+      ['done', patch.transcript.slice(0, 8000), patch.lang, id]
+    );
+  } else {
+    await run('UPDATE voice_notes SET transcript_status = ? WHERE id = ?', [patch.status, id]);
+  }
+
+  const note = await getVoiceNote(id);
+  if (note) publish({ type: 'voice.transcribed', taskId: note.task_id, actorId: note.author_id });
+  return note;
 }
 
 /* ------------------------------------------------------------------ */

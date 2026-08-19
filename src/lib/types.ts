@@ -99,6 +99,8 @@ export interface TaskFull extends Task {
   parent_title?: string | null;
 }
 
+export type TranscriptStatus = 'none' | 'pending' | 'done' | 'failed';
+
 export interface VoiceNote {
   id: string;
   task_id: string;
@@ -108,6 +110,11 @@ export interface VoiceNote {
   duration_ms: number;
   byte_size: number;
   created_at: number;
+  /** Roman script for Urdu speech, spoken-language script otherwise. */
+  transcript: string | null;
+  /** BCP-47-ish tag detected by the speech model, e.g. 'en' or 'ur'. */
+  transcript_lang: string | null;
+  transcript_status: TranscriptStatus;
   author?: User | null;
 }
 

@@ -12,7 +12,7 @@ import { formatDateTime, timeAgo } from './views/shared';
 const MENTION_RE = /@\[([^\]]+)\]\(([^)]+)\)/g;
 
 export default function CommentThread({
-  comments, me, users, canComment, onAdd, onDelete, onResolve, onDeleteVoice,
+  comments, me, users, canComment, onAdd, onDelete, onResolve, onDeleteVoice, onTranscriptChange,
 }: {
   comments: Comment[];
   me: User;
@@ -23,6 +23,7 @@ export default function CommentThread({
   onDelete: (id: string) => Promise<void>;
   onResolve: (id: string, resolved: boolean) => Promise<void>;
   onDeleteVoice: (id: string) => Promise<void>;
+  onTranscriptChange?: () => void;
 }) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -189,7 +190,7 @@ export default function CommentThread({
 
               {c.voice_notes.length > 0 && (
                 <div className="mt-1.5 max-w-[420px]">
-                  <VoiceNoteList notes={c.voice_notes} me={me} onDelete={onDeleteVoice} />
+                  <VoiceNoteList notes={c.voice_notes} me={me} onDelete={onDeleteVoice} onTranscriptChange={onTranscriptChange} />
                 </div>
               )}
             </div>

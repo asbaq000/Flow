@@ -416,6 +416,58 @@ ok('a non-author cannot delete a recording',
 ok('the author can delete their own recording',
    (await call(dev, `/api/voice/${commentVoice.body.voiceNote.id}`, { method: 'DELETE' })).status === 200);
 
+console.log('\nVoice transcription (transcribing itself runs in the browser; this is the API side)');
+{
+  const brief2 = await postVoice(manager, task.id);
+  const noteId = brief2.body.voiceNote.id;
+  ok('a fresh recording starts untranscribed', brief2.body.voiceNote.transcript_status === 'none',
+     brief2.body.voiceNote.transcript_status);
+  ok('no transcript text yet', brief2.body.voiceNote.transcript === null);
+
+  const claim1 = await call(lead, `/api/voice/${noteId}`, {
+    method: 'PATCH', body: JSON.stringify({ action: 'claim' }) });
+  ok('the first claim succeeds', claim1.status === 200 && claim1.body.claimed === true,
+     JSON.stringify(claim1.body));
+
+  const claim2 = await call(dev, `/api/voice/${noteId}`, {
+    method: 'PATCH', body: JSON.stringify({ action: 'claim' }) });
+  ok('a second, concurrent claim is refused — only one browser transcribes at a time',
+     claim2.status === 200 && claim2.body.claimed === false);
+
+  ok('an outsider cannot claim a note they cannot see',
+     (await call(manager2, `/api/voice/${noteId}`, {
+       method: 'PATCH', body: JSON.stringify({ action: 'claim' }) })).status === 403);
+
+  const saved = await call(lead, `/api/voice/${noteId}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'done', transcript: 'ap kese hain', lang: 'ur' }) });
+  ok('the transcript can be saved', saved.status === 200 && saved.body.voiceNote?.transcript === 'ap kese hain',
+     JSON.stringify(saved.body).slice(0, 150));
+  ok('its language tag is stored', saved.body.voiceNote?.transcript_lang === 'ur');
+  ok('status moves to done', saved.body.voiceNote?.transcript_status === 'done');
+
+  ok('an empty transcript is rejected', (await call(lead, `/api/voice/${noteId}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'done', transcript: '   ' }) })).status === 400);
+
+  ok('once done, someone else can still re-claim to retry',
+     (await call(dev, `/api/voice/${noteId}`, {
+       method: 'PATCH', body: JSON.stringify({ action: 'claim' }) })).body.claimed === false,
+     'claim should stay refused while status is done, not failed/none');
+
+  const brief3 = await postVoice(manager, task.id);
+  const failId = brief3.body.voiceNote.id;
+  const failed = await call(lead, `/api/voice/${failId}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'failed' }) });
+  ok('a failed attempt is recorded', failed.status === 200 && failed.body.voiceNote?.transcript_status === 'failed');
+  ok('a failed note can be re-claimed for another attempt',
+     (await call(lead, `/api/voice/${failId}`, {
+       method: 'PATCH', body: JSON.stringify({ action: 'claim' }) })).body.claimed === true);
+
+  const fetched = await call(lead, `/api/tasks/${task.id}`);
+  const noteInTask = fetched.body.task.voice_notes.find((v) => v.id === noteId);
+  ok('the task payload carries the transcript', noteInTask?.transcript === 'ap kese hain',
+     JSON.stringify(noteInTask).slice(0, 150));
+}
+
 console.log('\nDeveloper task sheet');
 // The task was already approved above, so it is genuinely DONE by now.
 const sheet = (await call(lead, `/api/users/${dev.user.id}/sheet`)).body.sheet;

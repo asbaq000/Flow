@@ -17,6 +17,7 @@ export type FlowEventType =
   | 'progress.added'
   | 'voice.added'
   | 'voice.removed'
+  | 'voice.transcribed'
   | 'notification';
 
 export interface FlowEvent {

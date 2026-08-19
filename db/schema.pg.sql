@@ -134,10 +134,22 @@ CREATE TABLE IF NOT EXISTS voice_notes (
   duration_ms INTEGER NOT NULL DEFAULT 0,
   byte_size   INTEGER NOT NULL DEFAULT 0,
   data        BYTEA NOT NULL,
-  created_at  BIGINT NOT NULL
+  created_at  BIGINT NOT NULL,
+  -- Speech-to-text, generated client-side (see src/lib/transcribe*.ts). Urdu
+  -- speech is stored transliterated into Roman script, English as spoken.
+  transcript        TEXT,
+  transcript_lang   TEXT,
+  transcript_status TEXT NOT NULL DEFAULT 'none'
+                      CHECK (transcript_status IN ('none','pending','done','failed'))
 );
 CREATE INDEX IF NOT EXISTS idx_voice_task    ON voice_notes(task_id);
 CREATE INDEX IF NOT EXISTS idx_voice_comment ON voice_notes(comment_id);
+
+-- Upgrades a database created before transcription existed. Safe to run on
+-- every cold start: each ADD COLUMN is a no-op once the column is present.
+ALTER TABLE voice_notes ADD COLUMN IF NOT EXISTS transcript TEXT;
+ALTER TABLE voice_notes ADD COLUMN IF NOT EXISTS transcript_lang TEXT;
+ALTER TABLE voice_notes ADD COLUMN IF NOT EXISTS transcript_status TEXT NOT NULL DEFAULT 'none';
 
 CREATE TABLE IF NOT EXISTS progress_updates (
   id           TEXT PRIMARY KEY,

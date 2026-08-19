@@ -102,6 +102,22 @@ export const api = {
     },
     remove: (id: string) => request<{ ok: true }>(`/api/voice/${id}`, { method: 'DELETE' }),
     src: (id: string) => `/api/voice/${id}`,
+    /** True if this tab won the race to transcribe — false means someone else already is. */
+    claimTranscription: (id: string) =>
+      request<{ claimed: boolean }>(`/api/voice/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'claim' }),
+      }),
+    saveTranscript: (id: string, transcript: string, lang: string | null) =>
+      request<{ voiceNote: VoiceNote }>(`/api/voice/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'done', transcript, lang }),
+      }),
+    markTranscriptFailed: (id: string) =>
+      request<{ voiceNote: VoiceNote }>(`/api/voice/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'failed' }),
+      }),
   },
   sheet: {
     get: (userId: string) => request<{ sheet: TaskSheet }>(`/api/users/${userId}/sheet`),
