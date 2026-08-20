@@ -13,7 +13,9 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 
 const PORT = 5555;
 const REDIRECT_URI = `http://localhost:${PORT}/callback`;
@@ -29,7 +31,10 @@ function loadEnvFiles() {
     const file = path.join(process.cwd(), name);
     if (!fs.existsSync(file)) continue;
     for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-      const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      // Non-greedy, so a Windows CRLF ending cannot smuggle a \r into the
+      // value — a stray carriage return in a token fails in a way that looks
+      // like the token itself is simply wrong.
+      const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
       // First file wins, matching Next.js's precedence.
       if (match && !process.env[match[1]]) {
         process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
@@ -126,11 +131,60 @@ Keep it secret: it books meetings as this Google account.
   process.exit(0);
 });
 
-server.listen(PORT, () => {
-  console.log(`
-Open this in the browser, signed in as the dedicated Google account:
+/**
+ * Opens the consent screen directly.
+ *
+ * The URL is ~300 characters, which terminals wrap across lines — copying it
+ * by hand tends to lose a chunk, and Google answers a truncated URL with a
+ * bare "400. That's an error", which says nothing about the real cause. On
+ * Windows this goes through rundll32 rather than `start` so that the
+ * ampersands in the query string are never handed to a shell.
+ */
+function openBrowser(url) {
+  const [cmd, args] =
+    process.platform === 'win32' ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
+    : process.platform === 'darwin' ? ['open', [url]]
+    : ['xdg-open', [url]];
+  try {
+    spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-${authUrl}
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`
+Port ${PORT} is already taken, almost always by an earlier run of this script
+still waiting for its redirect.
+
+Switch to that terminal window and press Ctrl+C, then run this again. The
+port has to be free because Google sends the authorisation back to it.
+`);
+  } else {
+    console.error('\nCould not start the callback server:', err.message);
+  }
+  process.exit(1);
+});
+
+server.listen(PORT, () => {
+  // A copy-paste fallback that survives line wrapping, for when the browser
+  // cannot be opened for us (or opens as the wrong Google account).
+  const urlFile = path.join(os.tmpdir(), 'flow-google-auth-url.txt');
+  fs.writeFileSync(urlFile, authUrl, 'utf8');
+
+  const opened = openBrowser(authUrl);
+
+  console.log(`
+${opened ? 'Opening the consent screen in your browser...' : 'Could not open a browser automatically.'}
+
+Sign in as the Google account that owns the Cloud project, then choose
+Advanced -> Go to Flow (unsafe) -> Allow.
+
+If no browser opened, or it opened as the wrong account, the full link is in:
+  ${urlFile}
+(open that file, copy the single line inside — do not retype it)
 
 Waiting for the redirect on ${REDIRECT_URI} ...
 `);
