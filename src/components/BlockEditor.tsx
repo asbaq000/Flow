@@ -485,13 +485,13 @@ function BlockRow(props: RowProps) {
     >
       {/* gutter */}
       {editable && (
-        <div className="sticky top-0 flex shrink-0 items-center gap-0.5 pt-[3px] opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <div className="sticky top-0 flex shrink-0 items-center gap-1 pt-[3px]">
           <button
             onClick={props.onAddBelow}
-            className="grid h-5 w-5 place-items-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)]"
+            className="grid h-6 w-6 place-items-center rounded-md border border-[var(--border-strong)] bg-[var(--bg-active)] text-[var(--text)] shadow-sm hover:border-[var(--accent)] hover:bg-[var(--bg-hover)] hover:text-[var(--accent)]"
             aria-label="Add block below"
           >
-            <Plus size={14} />
+            <Plus size={15} />
           </button>
           <Popover
             width={210}
@@ -501,15 +501,24 @@ function BlockRow(props: RowProps) {
                 draggable
                 onDragStart={props.onDragStart}
                 onDragEnd={props.onDragEnd}
-                className="grid h-5 w-4 cursor-grab place-items-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] active:cursor-grabbing"
+                className="grid h-6 w-6 cursor-grab place-items-center rounded-md border border-[var(--border-strong)] bg-[var(--bg-active)] text-[var(--text)] shadow-sm hover:border-[var(--accent)] hover:bg-[var(--bg-hover)] hover:text-[var(--accent)] active:cursor-grabbing"
                 aria-label="Block options — drag to move"
               >
-                <GripVertical size={13} />
+                <GripVertical size={14} />
               </button>
             )}
           >
             {(close) => (
               <>
+                <button
+                  className="menu-item btn-danger-solid mb-1 w-full justify-center"
+                  onClick={() => {
+                    props.onDelete();
+                    close();
+                  }}
+                >
+                  <Trash2 size={14} /> Delete block
+                </button>
                 <button
                   className="menu-item"
                   onClick={() => {
@@ -518,15 +527,6 @@ function BlockRow(props: RowProps) {
                   }}
                 >
                   <Plus size={14} /> Duplicate
-                </button>
-                <button
-                  className="menu-item btn-danger"
-                  onClick={() => {
-                    props.onDelete();
-                    close();
-                  }}
-                >
-                  <Trash2 size={14} /> Delete
                 </button>
                 <div className="my-1 border-t" />
                 <div className="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">

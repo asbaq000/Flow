@@ -306,7 +306,7 @@ export default function TaskPanel({
                 width={190}
                 align="end"
                 trigger={({ toggle }) => (
-                  <button onClick={toggle} className="btn btn-ghost px-1.5" aria-label="More actions">
+                  <button onClick={toggle} className="btn btn-outline px-1.5" aria-label="More actions" title="More actions">
                     <MoreHorizontal size={16} />
                   </button>
                 )}
@@ -531,7 +531,7 @@ export default function TaskPanel({
                                 onDelete(task.id);
                               }
                             }}
-                            className="btn btn-outline btn-danger py-1 text-[12.5px]"
+                            className="btn btn-danger-solid py-1 text-[12.5px]"
                             title="Delete this task"
                           >
                             <Trash2 size={13} /> Delete
