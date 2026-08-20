@@ -108,8 +108,15 @@ async function connect(): Promise<Db> {
       // function needs the cert bundled, which is more trouble than it is worth
       // for a connection that never leaves the provider's network.
       ssl: url.includes('localhost') ? undefined : { rejectUnauthorized: false },
-      // Vercel functions are short-lived, so a big pool just exhausts Supabase.
-      max: Number(process.env.PG_POOL_MAX ?? 3),
+      /*
+       * Hydrating a board issues its queries as one batch. With a pool this
+       * small they queue into several sequential waves instead, and every
+       * wave costs a full round trip — so the pool size directly sets how
+       * slow a page feels. Supabase's transaction pooler (port 6543) is
+       * built to multiplex many client connections, so a modest pool is
+       * safe; lower PG_POOL_MAX if the project reports connection pressure.
+       */
+      max: Number(process.env.PG_POOL_MAX ?? 8),
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 10_000,
     });
