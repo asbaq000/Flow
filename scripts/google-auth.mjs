@@ -76,6 +76,19 @@ const authUrl =
     prompt: 'consent',
   });
 
+/**
+ * Winds the listener down before leaving.
+ *
+ * Calling process.exit() straight from a request handler kills the loop while
+ * the socket is still closing, which trips a libuv assertion on Windows
+ * ("!(handle->flags & UV_HANDLE_CLOSING)") after the work has already
+ * succeeded — alarming to read, and easy to mistake for a real failure.
+ */
+function finish(code) {
+  server.close();
+  setTimeout(() => process.exit(code), 250);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   if (url.pathname !== '/callback') {
@@ -90,8 +103,8 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(400, { 'Content-Type': 'text/html' })
       .end(`<p>Authorisation failed: ${error ?? 'no code returned'}</p>`);
     console.error(`\nAuthorisation failed: ${error ?? 'no code returned'}`);
-    server.close();
-    process.exit(1);
+    finish(1);
+    return;
   }
 
   const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -110,9 +123,22 @@ const server = http.createServer(async (req, res) => {
   if (!tokenRes.ok || !body.refresh_token) {
     res.writeHead(400, { 'Content-Type': 'text/html' })
       .end('<p>No refresh token came back. Check the console.</p>');
-    console.error('\nGoogle did not return a refresh token:', body);
-    server.close();
-    process.exit(1);
+    /*
+     * Google only issues a refresh token the first time an account grants
+     * this client. A repeat run comes back without one until the old grant
+     * is revoked, so say that rather than just dumping the response.
+     */
+    console.error(`
+Google did not return a refresh token${body.error ? ` (${body.error})` : ''}.
+
+This normally means the account has already granted access to this app, and
+Google only hands out a refresh token on the first grant. Revoke it, then run
+this again:
+
+  https://myaccount.google.com/permissions  ->  Flow  ->  Remove access
+`);
+    finish(1);
+    return;
   }
 
   res.writeHead(200, { 'Content-Type': 'text/html' }).end(
@@ -124,11 +150,12 @@ Add this to .env.local (or .env) and to your host's environment variables:
 
 GOOGLE_REFRESH_TOKEN=${body.refresh_token}
 
-Keep it secret: it books meetings as this Google account.
+Keep it secret: it books meetings as this Google account. Do not paste it
+into a chat, an issue, or a commit — if it leaks, revoke Flow at
+https://myaccount.google.com/permissions and run this again.
 `);
 
-  server.close();
-  process.exit(0);
+  finish(0);
 });
 
 /**
