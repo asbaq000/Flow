@@ -1,6 +1,6 @@
 import { currentUser } from '@/lib/auth';
 import { fail, ok, readJson } from '@/lib/api';
-import { deleteTask, getTask, getUser, listActivity, listComments, setTaskTags, updateTask } from '@/lib/store';
+import { allUsers, deleteTask, getTask, getUser, listActivity, listComments, setTaskTags, updateTask } from '@/lib/store';
 import {
   abilitiesFor, canArchive, canAssign, canChangeStatus, canDelete, canEditContent, canEditPriority,
   canView, isAssignableRole, canSetStatus,
@@ -19,10 +19,20 @@ export async function GET(_req: Request, { params }: Ctx) {
   if (!task) return fail('Task not found', 404);
   if (!canView(user, task)) return fail('You do not have access to this task', 403);
 
+  // Independent of each other, so they go out together rather than in a chain.
+  // `members` rides along too: the panel needs it to offer @mentions, and
+  // deriving it here costs nothing on top of the task we already hydrated.
+  const [comments, activity, everyone] = await Promise.all([
+    listComments(id),
+    listActivity(id),
+    allUsers(),
+  ]);
+
   return ok({
     task,
-    comments: await listComments(id),
-    activity: await listActivity(id),
+    comments,
+    activity,
+    members: everyone.filter((u) => canView(u, task)),
     abilities: abilitiesFor(user, task),
   });
 }

@@ -11,19 +11,49 @@ import { appUrl, sendMail } from './email';
 
 const USER_COLS = 'id, email, name, role, avatar_color, title, created_at';
 
+/**
+ * Every hydrated task, comment, voice note and progress update needs its
+ * author. Resolved one query at a time that is hundreds of round trips to
+ * paint one board — and the connection pool is deliberately tiny, so they
+ * queue rather than fan out. A workspace has a handful of people who change
+ * rarely, so the whole table is worth holding briefly in memory.
+ */
+const USER_CACHE_TTL_MS = 15_000;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __flow_user_cache__: { at: number; byId: Map<string, User> } | undefined;
+}
+
+export function invalidateUserCache() {
+  global.__flow_user_cache__ = undefined;
+}
+
+async function userCache(): Promise<Map<string, User>> {
+  const cached = global.__flow_user_cache__;
+  if (cached && Date.now() - cached.at < USER_CACHE_TTL_MS) return cached.byId;
+
+  const rows = await many<User>(`SELECT ${USER_COLS} FROM users`);
+  const byId = new Map(rows.map((u) => [u.id, u]));
+  global.__flow_user_cache__ = { at: Date.now(), byId };
+  return byId;
+}
+
 export async function getUser(id: string | null): Promise<User | null> {
   if (!id) return null;
-  return one<User>(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [id]);
+  return (await userCache()).get(id) ?? null;
 }
 
 export async function getUserByEmail(email: string): Promise<User | null> {
+  // Sign-in path: always authoritative, never the cache.
   return one<User>(`SELECT ${USER_COLS} FROM users WHERE email = ?`, [email.trim().toLowerCase()]);
 }
 
 export async function allUsers(): Promise<User[]> {
-  return many<User>(
-    `SELECT ${USER_COLS} FROM users ORDER BY CASE role
-       WHEN 'CEO' THEN 0 WHEN 'MANAGER' THEN 1 WHEN 'TEAM_LEAD' THEN 2 ELSE 3 END, name`
+  const users = [...(await userCache()).values()];
+  const rank = { CEO: 0, MANAGER: 1, TEAM_LEAD: 2 } as Record<string, number>;
+  return users.sort(
+    (a, b) => (rank[a.role] ?? 3) - (rank[b.role] ?? 3) || a.name.localeCompare(b.name)
   );
 }
 
@@ -31,55 +61,101 @@ export async function allUsers(): Promise<User[]> {
 /* Tasks                                                               */
 /* ------------------------------------------------------------------ */
 
-async function hydrate(task: Task, depth = 1): Promise<TaskFull> {
-  const [tags, links, collaborators, commentRow, voiceNotes, progressUpdates] = await Promise.all([
-    many<Tag>(
-      `SELECT t.* FROM tags t JOIN task_tags tt ON tt.tag_id = t.id
-       WHERE tt.task_id = ? ORDER BY t.name`,
-      [task.id]
-    ),
-    many<TaskLink>('SELECT * FROM task_links WHERE task_id = ? ORDER BY position, id', [task.id]),
-    many<User>(
-      `SELECT u.id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at
-       FROM users u JOIN task_assignees ta ON ta.user_id = u.id
-       WHERE ta.task_id = ? ORDER BY u.name`,
-      [task.id]
-    ),
-    one<{ c: number }>('SELECT COUNT(*)::int AS c FROM comments WHERE task_id = ?', [task.id]),
-    // Only briefing notes here — the ones under comments travel with the comment.
-    listVoiceNotes({ taskId: task.id, onTaskOnly: true }),
-    listProgressUpdates(task.id),
-  ]);
+const groupBy = <T>(rows: T[], key: (row: T) => string): Map<string, T[]> => {
+  const out = new Map<string, T[]>();
+  for (const row of rows) {
+    const k = key(row);
+    const bucket = out.get(k);
+    if (bucket) bucket.push(row);
+    else out.set(k, [row]);
+  }
+  return out;
+};
 
-  const [creator, assignee, subtaskRows, parentRow] = await Promise.all([
-    getUser(task.creator_id),
-    getUser(task.assignee_id),
+/**
+ * Hydrates a whole set of tasks in a fixed number of queries rather than a
+ * fixed number *per task*. The pool is intentionally tiny (Supabase caps
+ * connections and Vercel runs many instances), so per-task fan-out does not
+ * actually run in parallel — it queues, and a board of 30 tasks turns into
+ * hundreds of serialised round trips.
+ */
+async function hydrateAll(tasks: Task[], depth = 1): Promise<TaskFull[]> {
+  if (!tasks.length) return [];
+  const ids = tasks.map((t) => t.id);
+  const parentIds = [...new Set(tasks.map((t) => t.parent_id).filter(Boolean))] as string[];
+
+  const [
+    tagRows, linkRows, collabRows, commentCounts, voiceRows, progressRows, subtaskRows, parentRows, users,
+  ] = await Promise.all([
+    many<Tag & { task_id: string }>(
+      `SELECT t.*, tt.task_id FROM tags t JOIN task_tags tt ON tt.tag_id = t.id
+       WHERE tt.task_id = ANY(?) ORDER BY t.name`,
+      [ids]
+    ),
+    many<TaskLink>('SELECT * FROM task_links WHERE task_id = ANY(?) ORDER BY position, id', [ids]),
+    many<{ task_id: string; user_id: string }>(
+      'SELECT task_id, user_id FROM task_assignees WHERE task_id = ANY(?)',
+      [ids]
+    ),
+    many<{ task_id: string; c: number }>(
+      'SELECT task_id, COUNT(*)::int AS c FROM comments WHERE task_id = ANY(?) GROUP BY task_id',
+      [ids]
+    ),
+    // Only briefing notes here — the ones under comments travel with the comment.
+    many<VoiceNote>(
+      `SELECT ${VOICE_COLS} FROM voice_notes
+       WHERE task_id = ANY(?) AND comment_id IS NULL ORDER BY created_at`,
+      [ids]
+    ),
+    many<ProgressUpdate>(
+      `SELECT ${PROGRESS_COLS} FROM progress_updates WHERE task_id = ANY(?) ORDER BY created_at DESC`,
+      [ids]
+    ),
     depth > 0
       ? many<Task>(
-          'SELECT * FROM tasks WHERE parent_id = ? AND archived = 0 ORDER BY position, created_at',
-          [task.id]
+          'SELECT * FROM tasks WHERE parent_id = ANY(?) AND archived = 0 ORDER BY position, created_at',
+          [ids]
         )
       : Promise.resolve([] as Task[]),
-    task.parent_id
-      ? one<{ title: string }>('SELECT title FROM tasks WHERE id = ?', [task.parent_id])
-      : Promise.resolve(null),
+    parentIds.length
+      ? many<{ id: string; title: string }>('SELECT id, title FROM tasks WHERE id = ANY(?)', [parentIds])
+      : Promise.resolve([] as { id: string; title: string }[]),
+    userCache(),
   ]);
 
-  const subtasks = await Promise.all(subtaskRows.map((s) => hydrate(s, depth - 1)));
+  const subtasks = await hydrateAll(subtaskRows, depth - 1);
 
-  return {
+  const tagsBy = groupBy(tagRows, (r) => r.task_id);
+  const linksBy = groupBy(linkRows, (r) => r.task_id);
+  const collabBy = groupBy(collabRows, (r) => r.task_id);
+  const voiceBy = groupBy(voiceRows, (r) => r.task_id);
+  const progressBy = groupBy(progressRows, (r) => r.task_id);
+  const subtasksBy = groupBy(subtasks, (s) => s.parent_id!);
+  const countBy = new Map(commentCounts.map((r) => [r.task_id, r.c]));
+  const parentTitles = new Map(parentRows.map((r) => [r.id, r.title]));
+  const withAuthor = <T extends { author_id: string | null }>(rows: T[]) =>
+    rows.map((r) => ({ ...r, author: users.get(r.author_id ?? '') ?? null }));
+
+  return tasks.map((task) => ({
     ...task,
-    creator,
-    assignee,
-    collaborators,
-    tags,
-    links,
-    subtasks,
-    comment_count: commentRow?.c ?? 0,
-    voice_notes: voiceNotes,
-    progress_updates: progressUpdates,
-    parent_title: parentRow?.title ?? null,
-  };
+    creator: users.get(task.creator_id ?? '') ?? null,
+    assignee: users.get(task.assignee_id ?? '') ?? null,
+    collaborators: (collabBy.get(task.id) ?? [])
+      .map((c) => users.get(c.user_id))
+      .filter(Boolean)
+      .sort((a, b) => a!.name.localeCompare(b!.name)) as User[],
+    tags: tagsBy.get(task.id) ?? [],
+    links: linksBy.get(task.id) ?? [],
+    subtasks: subtasksBy.get(task.id) ?? [],
+    comment_count: countBy.get(task.id) ?? 0,
+    voice_notes: withAuthor(voiceBy.get(task.id) ?? []),
+    progress_updates: withAuthor(progressBy.get(task.id) ?? []),
+    parent_title: task.parent_id ? parentTitles.get(task.parent_id) ?? null : null,
+  }));
+}
+
+async function hydrate(task: Task, depth = 1): Promise<TaskFull> {
+  return (await hydrateAll([task], depth))[0];
 }
 
 export async function getTask(id: string): Promise<TaskFull | null> {
@@ -115,7 +191,7 @@ export async function listTasks(q: TaskQuery = {}): Promise<TaskFull[]> {
     params
   );
 
-  let tasks = await Promise.all(rows.map((r) => hydrate(r)));
+  let tasks = await hydrateAll(rows);
 
   if (q.search && q.search.trim()) {
     const needle = q.search.trim().toLowerCase();
@@ -151,11 +227,13 @@ export async function createTask(
 ): Promise<TaskFull> {
   const now = Date.now();
   const id = newId('t_');
-  const seq = await nextTaskSeq();
   const assignee = input.assigneeId !== undefined ? input.assigneeId : routedTo;
   const title = input.title.trim() || 'Untitled';
 
-  const maxPos = await one<{ p: number }>('SELECT COALESCE(MAX(position), 0) AS p FROM tasks');
+  const [seq, maxPos] = await Promise.all([
+    nextTaskSeq(),
+    one<{ p: number }>('SELECT COALESCE(MAX(position), 0) AS p FROM tasks'),
+  ]);
 
   await run(
     `INSERT INTO tasks
@@ -179,23 +257,32 @@ export async function createTask(
     ]
   );
 
-  for (const [i, link] of (input.links ?? []).entries()) {
-    const url = normalizeUrl(link.url ?? '');
-    if (!url) continue; // drop unusable/unsafe links rather than reject the whole task
-    await run('INSERT INTO task_links (id, task_id, url, label, position) VALUES (?,?,?,?,?)', [
-      newId('l_'), id, url, (link.label ?? '').trim().slice(0, 120), i,
-    ]);
-  }
-  for (const tagId of input.tagIds ?? []) {
-    await run('INSERT INTO task_tags (task_id, tag_id) VALUES (?,?) ON CONFLICT DO NOTHING', [
-      id, tagId,
-    ]);
-  }
+  // Links and tags are independent of each other and of the activity log, so
+  // they all go out at once instead of one blocking round trip per row.
+  const links = (input.links ?? [])
+    .map((link, i) => ({ ...link, url: normalizeUrl(link.url ?? ''), position: i }))
+    // Drop unusable/unsafe links rather than reject the whole task.
+    .filter((link) => link.url);
 
-  await logActivity(id, actor.id, 'created', {});
+  await Promise.all([
+    ...links.map((link) =>
+      run('INSERT INTO task_links (id, task_id, url, label, position) VALUES (?,?,?,?,?)', [
+        newId('l_'), id, link.url, (link.label ?? '').trim().slice(0, 120), link.position,
+      ])
+    ),
+    ...(input.tagIds ?? []).map((tagId) =>
+      run('INSERT INTO task_tags (task_id, tag_id) VALUES (?,?) ON CONFLICT DO NOTHING', [id, tagId])
+    ),
+    logActivity(id, actor.id, 'created', {}),
+    ...(assignee && assignee !== actor.id
+      ? [
+          logActivity(id, actor.id, 'assigned', { to: assignee }),
+          notify(assignee, actor.id, 'assigned', id, null, `${actor.name} assigned you "${title}"`),
+        ]
+      : []),
+  ]);
+
   if (assignee && assignee !== actor.id) {
-    await logActivity(id, actor.id, 'assigned', { to: assignee });
-    await notify(assignee, actor.id, 'assigned', id, null, `${actor.name} assigned you "${title}"`);
     void emailAssignment(actor, assignee, { id, seq, title });
   }
   publish({ type: 'task.created', taskId: id, actorId: actor.id });
@@ -409,13 +496,26 @@ export async function listComments(taskId: string): Promise<Comment[]> {
     'SELECT * FROM comments WHERE task_id = ? ORDER BY created_at',
     [taskId]
   );
-  return Promise.all(
-    rows.map(async (c) => ({
-      ...c,
-      author: await getUser(c.author_id),
-      voice_notes: await listVoiceNotes({ commentId: c.id }),
-    }))
-  );
+  if (!rows.length) return [];
+
+  // One query for every comment's audio, not one query per comment.
+  const [voiceRows, users] = await Promise.all([
+    many<VoiceNote>(
+      `SELECT ${VOICE_COLS} FROM voice_notes WHERE comment_id = ANY(?) ORDER BY created_at`,
+      [rows.map((c) => c.id)]
+    ),
+    userCache(),
+  ]);
+  const voiceBy = groupBy(voiceRows, (v) => v.comment_id!);
+
+  return rows.map((c) => ({
+    ...c,
+    author: users.get(c.author_id ?? '') ?? null,
+    voice_notes: (voiceBy.get(c.id) ?? []).map((v) => ({
+      ...v,
+      author: users.get(v.author_id ?? '') ?? null,
+    })),
+  }));
 }
 
 export async function addComment(actor: User, taskId: string, body: string): Promise<Comment> {
@@ -521,7 +621,8 @@ export async function listActivity(taskId: string): Promise<ActivityItem[]> {
     'SELECT * FROM activity WHERE task_id = ? ORDER BY created_at DESC LIMIT 100',
     [taskId]
   );
-  return Promise.all(rows.map(async (a) => ({ ...a, actor: await getUser(a.actor_id) })));
+  const users = await userCache();
+  return rows.map((a) => ({ ...a, actor: users.get(a.actor_id ?? '') ?? null }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -552,7 +653,8 @@ export async function listVoiceNotes(q: VoiceNoteQuery): Promise<VoiceNote[]> {
     `SELECT ${VOICE_COLS} FROM voice_notes WHERE ${where.join(' AND ')} ORDER BY created_at`,
     params
   );
-  return Promise.all(rows.map(async (v) => ({ ...v, author: await getUser(v.author_id) })));
+  const users = await userCache();
+  return rows.map((v) => ({ ...v, author: users.get(v.author_id ?? '') ?? null }));
 }
 
 export async function getVoiceNote(id: string): Promise<VoiceNote | null> {
@@ -644,7 +746,8 @@ export async function listProgressUpdates(taskId: string): Promise<ProgressUpdat
     `SELECT ${PROGRESS_COLS} FROM progress_updates WHERE task_id = ? ORDER BY created_at DESC`,
     [taskId]
   );
-  return Promise.all(rows.map(async (r) => ({ ...r, author: await getUser(r.author_id) })));
+  const users = await userCache();
+  return rows.map((r) => ({ ...r, author: users.get(r.author_id ?? '') ?? null }));
 }
 
 export interface ProgressInput {
@@ -1071,6 +1174,7 @@ export async function removeUser(actor: User, targetId: string): Promise<Removal
   }
 
   await run('DELETE FROM users WHERE id = ?', [targetId]);
+  invalidateUserCache();
   publish({ type: 'task.updated', taskId: null, actorId: actor.id });
 
   return { name: target.name, email: target.email, reassigned: open.length };

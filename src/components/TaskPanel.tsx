@@ -67,14 +67,8 @@ export default function TaskPanel({
       setComments(data.comments);
       setActivity(data.activity);
       setAbilities(data.abilities);
+      setMembers(data.members);
       setDoc(parseDoc(data.task.description));
-      try {
-        const { members: m } = await api.tasks.members(taskId);
-        setMembers(m);
-      } catch {
-        // Non-fatal: the composer just offers nobody rather than everybody.
-        setMembers([]);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load task');
     } finally {

@@ -1,7 +1,7 @@
 import { currentUser } from '@/lib/auth';
 import { one, run } from '@/lib/pg';
 import { fail, ok, readJson } from '@/lib/api';
-import { getUser, removeUser } from '@/lib/store';
+import { getUser, invalidateUserCache, removeUser } from '@/lib/store';
 import { canManageUsers, canRemoveUser, whyCannotRemove } from '@/lib/permissions';
 import type { Role } from '@/lib/types';
 
@@ -31,6 +31,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (title !== undefined) {
     await run('UPDATE users SET title = ? WHERE id = ?', [title.trim().slice(0, 60) || null, id]);
   }
+  invalidateUserCache();
 
   return ok({ user: await getUser(id) });
 }

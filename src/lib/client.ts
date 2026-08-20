@@ -40,6 +40,7 @@ export const api = {
         task: TaskFull;
         comments: Comment[];
         activity: import('./types').ActivityItem[];
+        members: User[];
         abilities: import('./permissions').TaskAbilities;
       }>(`/api/tasks/${id}`),
     create: (body: {

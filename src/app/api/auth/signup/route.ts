@@ -1,6 +1,6 @@
 import { createSession, hashPassword, newId, setSessionCookie } from '@/lib/auth';
 import { one, run } from '@/lib/pg';
-import { getUser } from '@/lib/store';
+import { getUser, invalidateUserCache } from '@/lib/store';
 import { fail, isValidEmail, ok, readJson } from '@/lib/api';
 import crypto from 'node:crypto';
 import type { Role } from '@/lib/types';
@@ -56,6 +56,8 @@ export async function POST(req: Request) {
       AVATAR_COLORS[userCount % AVATAR_COLORS.length], null, Date.now(),
     ]
   );
+
+  invalidateUserCache();
 
   const { token, expiresAt } = await createSession(id);
   await setSessionCookie(token, expiresAt);

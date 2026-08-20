@@ -154,8 +154,13 @@ export default function Workspace({
           refreshNotifications();
           return;
         }
-        refresh();
-        if (event.type === 'task.updated' || event.type === 'task.created') {
+        // Only board-shaped changes need the list refetched. Comments, voice
+        // notes and progress live inside the open task's own panel, which
+        // listens for those itself — refetching every task for them made
+        // typing a comment reload the whole board for everyone.
+        if (event.type === 'task.created' || event.type === 'task.updated' ||
+            event.type === 'task.deleted') {
+          refresh();
           refreshNotifications();
         }
       },
@@ -622,6 +627,8 @@ export default function Workspace({
         tags={tags}
         onClose={() => setNewTaskOpen(false)}
         onCreated={(task, routedTo) => {
+          // The created task is already in the response — painting it locally
+          // is instant, and the SSE echo refreshes the rest of the board.
           patchTaskLocal(task);
           setNewTaskOpen(false);
           flash(
@@ -629,7 +636,6 @@ export default function Workspace({
               ? `Task routed to ${routedTo.name} for triage`
               : 'Task created'
           );
-          refresh();
         }}
       />
 
