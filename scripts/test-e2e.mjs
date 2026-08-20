@@ -609,12 +609,18 @@ console.log('\nScheduling meetings');
      [dev.user.id, otherDev.user.id].every((id) => meeting?.participants?.some((p) => p.id === id)));
 
   /*
-   * Google is not configured in the test environment, which is the point: the
-   * meeting must still persist with the reason attached rather than vanish.
+   * Whether Google is configured is a property of the environment, not of the
+   * app, so assert the invariant that holds either way: the meeting is always
+   * saved, and its state always explains itself — a link when Google answered,
+   * a reason when it did not. Never a meeting that is silently neither.
    */
-  ok('an unreachable Google leaves the meeting saved, not lost', meeting?.status === 'failed',
-     meeting?.status);
-  ok('the reason is recorded for the organiser', Boolean(meeting?.sync_error));
+  const booked = meeting?.status === 'scheduled';
+  ok('the meeting is saved whatever Google does', Boolean(meeting?.id), meeting?.status);
+  ok(booked ? 'Google issued a Meet link' : 'an unreachable Google records why, and keeps the meeting',
+     booked ? Boolean(meeting.join_url) : Boolean(meeting.sync_error),
+     booked ? `join_url=${meeting.join_url}` : `sync_error=${meeting.sync_error}`);
+  ok('a booked meeting carries the calendar event it can be cancelled through',
+     booked ? Boolean(meeting.calendar_event_id) : meeting.calendar_event_id === null);
 
   ok('a title is required',
      (await call(lead, '/api/meetings',
