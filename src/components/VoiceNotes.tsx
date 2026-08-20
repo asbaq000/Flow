@@ -6,7 +6,9 @@ import {
 } from 'lucide-react';
 import type { User, VoiceNote } from '@/lib/types';
 import { api } from '@/lib/client';
-import { autoTranscribe, transcriptionSupported, useTranscriber } from '@/lib/useTranscriber';
+import {
+  appendTranscriptToDescription, autoTranscribe, transcriptionSupported, useTranscriber,
+} from '@/lib/useTranscriber';
 import { Avatar } from './ui';
 import { timeAgo } from './views/shared';
 
@@ -205,7 +207,9 @@ export function VoiceNotePlayer({
   const [progress, setProgress] = useState(0);
   const [current, setCurrent] = useState(0);
   const [manualBusy, setManualBusy] = useState(false);
-  const { transcribe } = useTranscriber();
+  // Percent of the speech model downloaded, on the first transcription only.
+  const [modelProgress, setModelProgress] = useState(0);
+  const { transcribe } = useTranscriber(setModelProgress);
 
   /**
    * Fills in a transcript for a note that never got one automatically — the
@@ -219,12 +223,14 @@ export function VoiceNotePlayer({
     try {
       const res = await fetch(api.voice.src(note.id));
       const blob = await res.blob();
-      await autoTranscribe(note.id, blob, transcribe);
+      // A note on the brief feeds the description; one on a comment does not.
+      await autoTranscribe(note.id, blob, transcribe,
+        note.comment_id ? undefined : (text) => appendTranscriptToDescription(note.task_id, text));
       onTranscriptChange?.();
     } finally {
       setManualBusy(false);
     }
-  }, [note.id, transcribe, onTranscriptChange]);
+  }, [note.id, note.comment_id, note.task_id, transcribe, onTranscriptChange]);
 
   const toggle = () => {
     const el = audioRef.current;
@@ -317,7 +323,12 @@ export function VoiceNotePlayer({
         )}
       </div>
 
-      <TranscriptRow note={note} busy={manualBusy} onRetry={runManualTranscription} />
+      <TranscriptRow
+        note={note}
+        busy={manualBusy}
+        modelProgress={modelProgress}
+        onRetry={runManualTranscription}
+      />
     </div>
   );
 }
@@ -326,10 +337,13 @@ export function VoiceNotePlayer({
 function TranscriptRow({
   note,
   busy,
+  modelProgress,
   onRetry,
 }: {
   note: VoiceNote;
   busy: boolean;
+  /** 1-99 while the speech model downloads; 0 once it is cached and running. */
+  modelProgress: number;
   onRetry: () => void;
 }) {
   if (note.transcript_status === 'done' && note.transcript) {
@@ -380,7 +394,9 @@ function TranscriptRow({
           <RefreshCw size={11} />
         )}
         {busy
-          ? 'Transcribing… (first time may download a small speech model)'
+          ? modelProgress > 0 && modelProgress < 100
+            ? `Downloading the speech model… ${modelProgress}% (one time only)`
+            : 'Transcribing…'
           : note.transcript_status === 'failed'
             ? 'Transcription failed — try again'
             : 'Transcribe'}

@@ -17,7 +17,7 @@ import BlockEditor from './BlockEditor';
 import CommentThread from './CommentThread';
 import ProgressPanel from './ProgressPanel';
 import { VoiceNoteList, VoiceRecorder } from './VoiceNotes';
-import { autoTranscribe, useTranscriber } from '@/lib/useTranscriber';
+import { autoTranscribe, useTranscriber, withTranscriptAppended } from '@/lib/useTranscriber';
 import { formatDateTime, fromDateInput, timeAgo, toDateInput } from './views/shared';
 
 type Tab = 'description' | 'links' | 'activity';
@@ -56,6 +56,12 @@ export default function TaskPanel({
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
+
+  // Transcription finishes long after the recording was uploaded, so the
+  // callback that files it into the description needs the description as it
+  // is *then*, not as it was when the recording started.
+  const docRef = useRef<Block[]>(doc);
+  docRef.current = doc;
 
   /* ---------- load ---------- */
 
@@ -223,10 +229,12 @@ export default function TaskPanel({
     async (blob: Blob, durationMs: number) => {
       if (!task) return;
       const { voiceNote } = await api.voice.upload(task.id, blob, durationMs);
-      void autoTranscribe(voiceNote.id, blob, transcribe);
+      void autoTranscribe(voiceNote.id, blob, transcribe, (text) => {
+        onDocChange(withTranscriptAppended(docRef.current, text));
+      });
       await load();
     },
-    [task, load, transcribe]
+    [task, load, transcribe, onDocChange]
   );
 
   const removeVoice = useCallback(

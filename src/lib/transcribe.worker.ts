@@ -16,15 +16,40 @@ import type { AutomaticSpeechRecognitionPipeline } from '@xenova/transformers';
 // This app ships no local copy of the model — always fetch from the hub.
 env.allowLocalModels = false;
 
-const MODEL_ID = 'Xenova/whisper-tiny';
+/*
+ * Tiny — what this used to use — is weak on English and close to unusable on
+ * Urdu, which is most of why transcripts came out badly. Small is a large
+ * step up on both, and is the biggest Whisper that still runs in a browser
+ * tab, so it is the default.
+ *
+ * It is not free: ~238MB downloaded once (cached afterwards) and enough
+ * memory that a modest phone can have its tab killed mid-transcription. A
+ * crashed tab is worse than a rougher transcript, so low-memory devices get
+ * base (~73MB) instead. deviceMemory is a coarse, Chromium-only hint, so an
+ * unknown value is treated as capable rather than assumed weak.
+ */
+const LOW_MEMORY_GB = 4;
+
+function pickModel(): string {
+  const gb = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  return typeof gb === 'number' && gb < LOW_MEMORY_GB
+    ? 'Xenova/whisper-base'
+    : 'Xenova/whisper-small';
+}
+
+const MODEL_ID = pickModel();
+
+/** Whisper hears 30s at a time; longer audio must be fed as overlapping windows. */
+const CHUNK_SECONDS = 30;
+const CHUNK_OVERLAP_SECONDS = 5;
 
 let transcriberPromise: Promise<AutomaticSpeechRecognitionPipeline> | null = null;
 
 function getTranscriber() {
   if (!transcriberPromise) {
     transcriberPromise = pipeline('automatic-speech-recognition', MODEL_ID, {
-      // The quantized weights are roughly half the size of full precision —
-      // the difference between ~75MB and ~41MB on a visitor's first use.
+      // Quantized weights are roughly half the size of full precision, which
+      // matters a lot at this model size.
       quantized: true,
       progress_callback: (p: { status: string; progress?: number }) => {
         if (p.status === 'progress' && typeof p.progress === 'number') {
@@ -53,7 +78,24 @@ self.onmessage = async (event: MessageEvent<TranscribeRequest>) => {
 
     // No `language` option: letting Whisper auto-detect is what lets one
     // recorder handle both English and Urdu without the user choosing.
-    const output = await transcriber(audio, { task: 'transcribe' });
+    const output = await transcriber(audio, {
+      task: 'transcribe',
+      /*
+       * Without chunking, anything past the model's 30s window is silently
+       * dropped — a two-minute note would transcribe only its opening.
+       * Overlapping windows are stitched back together by the pipeline.
+       */
+      chunk_length_s: CHUNK_SECONDS,
+      stride_length_s: CHUNK_OVERLAP_SECONDS,
+      /*
+       * Whisper's characteristic failure is looping a phrase forever once it
+       * loses the thread, especially on silence or background noise. Greedy
+       * decoding keeps it fast enough to be usable at this model size, and
+       * blocking repeated 3-grams stops the loop.
+       */
+      temperature: 0,
+      no_repeat_ngram_size: 3,
+    });
     const text = Array.isArray(output) ? output.map((o) => o.text).join(' ') : output.text;
 
     postMessage({ type: 'result', id, text: (text ?? '').trim() });

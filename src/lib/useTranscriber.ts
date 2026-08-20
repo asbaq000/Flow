@@ -2,7 +2,9 @@
 
 import { useCallback, useRef } from 'react';
 import { hasArabicScript, urduToRoman } from './urduRoman';
-import { api } from './client';
+import { api, serializeDoc } from './client';
+import { parseDoc } from './types';
+import type { Block } from './types';
 
 const SAMPLE_RATE = 16_000;
 
@@ -64,10 +66,12 @@ function getWorker(): Worker {
  * download on a visitor's first transcription (cached after) and running on
  * whatever CPU the visitor's device has.
  */
-export function useTranscriber() {
+export function useTranscriber(onProgress?: (percent: number) => void) {
   // One in-flight request at a time per hook instance; the API-level "claim"
   // handles cross-tab/cross-visitor duplication.
   const busy = useRef(false);
+  const progressRef = useRef(onProgress);
+  progressRef.current = onProgress;
 
   const transcribe = useCallback(async (blob: Blob): Promise<TranscribeResult> => {
     if (busy.current) throw new Error('A transcription is already running');
@@ -87,8 +91,11 @@ export function useTranscriber() {
           } else if (msg.type === 'error' && msg.id === id) {
             worker.removeEventListener('message', onMessage);
             reject(new Error(msg.message));
+          } else if (msg.type === 'progress') {
+            // The model is a large one-time download; without this the UI
+            // would just sit on "Transcribing…" for minutes the first time.
+            progressRef.current?.(msg.progress);
           }
-          // 'loaded' and 'progress' messages are informational only for now.
         };
         worker.addEventListener('message', onMessage);
         // The Float32Array's buffer is transferred, not copied — cheap even
@@ -108,6 +115,35 @@ export function useTranscriber() {
   }, []);
 
   return { transcribe };
+}
+
+/**
+ * Adds the spoken words to a description as a new paragraph.
+ *
+ * A brand-new task's description is a single empty paragraph, so the common
+ * case is filling that in rather than appending below it. Existing writing is
+ * never overwritten — the transcript goes underneath whatever is already
+ * there.
+ */
+export function withTranscriptAppended(doc: Block[], text: string): Block[] {
+  const blocks = doc.length ? doc : parseDoc(null);
+  const paragraph: Block = {
+    id: 'b' + Math.random().toString(36).slice(2, 10),
+    type: 'paragraph',
+    text,
+  };
+
+  const onlyBlockIsEmpty = blocks.length === 1 && !blocks[0].text.trim() && blocks[0].type === 'paragraph';
+  if (onlyBlockIsEmpty) return [{ ...blocks[0], text }];
+
+  return [...blocks, paragraph];
+}
+
+/** Writes a transcript into a task's description, reading its current one first. */
+export async function appendTranscriptToDescription(taskId: string, text: string): Promise<void> {
+  const { task } = await api.tasks.get(taskId);
+  const next = withTranscriptAppended(parseDoc(task.description), text);
+  await api.tasks.update(taskId, { description: serializeDoc(next) });
 }
 
 /** True when this browser can plausibly run the transcriber at all. */
@@ -133,7 +169,13 @@ export function transcriptionSupported(): boolean {
 export async function autoTranscribe(
   voiceNoteId: string,
   blob: Blob,
-  transcribe: (blob: Blob) => Promise<TranscribeResult>
+  transcribe: (blob: Blob) => Promise<TranscribeResult>,
+  /**
+   * Called with the finished transcript, for notes on a task's brief — it is
+   * what copies the spoken words into the description. Left off for notes on
+   * a comment, where the transcript belongs under the comment instead.
+   */
+  onTranscribed?: (text: string) => Promise<void> | void
 ): Promise<void> {
   try {
     const { claimed } = await api.voice.claimTranscription(voiceNoteId);
@@ -145,6 +187,15 @@ export async function autoTranscribe(
       return;
     }
     await api.voice.saveTranscript(voiceNoteId, text, lang);
+
+    // Kept separate from the save above: if writing the description fails
+    // (say the recorder may not edit the brief), the transcript itself is
+    // already stored and still shows under the note.
+    try {
+      await onTranscribed?.(text);
+    } catch (err) {
+      console.warn('[transcribe] could not write transcript into the description', err);
+    }
   } catch (err) {
     console.warn('[transcribe] failed for', voiceNoteId, err);
     await api.voice.markTranscriptFailed(voiceNoteId).catch(() => {});

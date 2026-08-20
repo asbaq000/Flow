@@ -7,7 +7,7 @@ import { emptyDoc } from '@/lib/types';
 import { api, serializeDoc } from '@/lib/client';
 import { Modal, PriorityPicker, TagChip } from './ui';
 import { VoiceRecorder } from './VoiceNotes';
-import { autoTranscribe, useTranscriber } from '@/lib/useTranscriber';
+import { appendTranscriptToDescription, autoTranscribe, useTranscriber } from '@/lib/useTranscriber';
 import BlockEditor from './BlockEditor';
 import { fromDateInput } from './views/shared';
 
@@ -71,9 +71,13 @@ export default function NewTaskModal({
       });
 
       // Voice notes need a task id, so they follow immediately after creation.
+      // The modal closes before transcription finishes, so the finished text
+      // is written straight to the saved task rather than into this form.
       for (const rec of pending) {
         const { voiceNote } = await api.voice.upload(task.id, rec.blob, rec.durationMs);
-        void autoTranscribe(voiceNote.id, rec.blob, transcribe);
+        void autoTranscribe(voiceNote.id, rec.blob, transcribe, (text) =>
+          appendTranscriptToDescription(task.id, text)
+        );
       }
 
       onCreated(task, routedTo);
