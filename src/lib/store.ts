@@ -331,7 +331,7 @@ export async function splitTask(
     if (piece.assigneeId) {
       await run(
         'INSERT INTO task_assignees (task_id, user_id) VALUES (?,?) ON CONFLICT DO NOTHING',
-        [parentId, piece.assigneeId]
+        [id, piece.assigneeId]
       );
       await notify(piece.assigneeId, actor.id, 'assigned', id, null,
         `${actor.name} assigned you "${title}" (split from "${parent.title}")`);

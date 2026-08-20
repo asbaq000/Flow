@@ -278,13 +278,17 @@ export default function Workspace({
     switch (section) {
       case 'inbox':
         return tasks.filter((t) => t.status === 'TRIAGE');
-      case 'mine':
-        return tasks.filter(
-          (t) =>
-            t.assignee_id === me.id ||
-            t.collaborators.some((c) => c.id === me.id) ||
-            t.subtasks.some((s) => s.assignee_id === me.id)
-        );
+      case 'mine': {
+        // A subtask split off to me is my actual unit of work — surface it as
+        // its own card (with its own status) rather than only as a nested row
+        // buried under the parent's status, which is often further along.
+        const result: TaskFull[] = [];
+        for (const t of tasks) {
+          if (t.assignee_id === me.id || t.collaborators.some((c) => c.id === me.id)) result.push(t);
+          result.push(...t.subtasks.filter((s) => s.assignee_id === me.id));
+        }
+        return result;
+      }
       case 'created':
         return tasks.filter((t) => t.creator_id === me.id);
       case 'archived':
@@ -312,10 +316,11 @@ export default function Workspace({
   const counts = useMemo(
     () => ({
       inbox: tasks.filter((t) => t.status === 'TRIAGE').length,
-      mine: tasks.filter(
-        (t) =>
-          (t.assignee_id === me.id || t.subtasks.some((s) => s.assignee_id === me.id)) && t.status !== 'DONE'
-      ).length,
+      mine: tasks.reduce((n, t) => {
+        if (t.assignee_id === me.id && t.status !== 'DONE') n += 1;
+        n += t.subtasks.filter((s) => s.assignee_id === me.id && s.status !== 'DONE').length;
+        return n;
+      }, 0),
       created: tasks.filter((t) => t.creator_id === me.id).length,
       unread: notifications.filter((n) => !n.read).length,
     }),
@@ -325,7 +330,14 @@ export default function Workspace({
   const activeFilterCount =
     filters.status.length + filters.priority.length + filters.assignee.length + filters.tag.length;
 
-  const openTask = tasks.find((t) => t.id === openTaskId) ?? null;
+  const openTask = useMemo(() => {
+    for (const t of tasks) {
+      if (t.id === openTaskId) return t;
+      const sub = t.subtasks.find((s) => s.id === openTaskId);
+      if (sub) return sub;
+    }
+    return null;
+  }, [tasks, openTaskId]);
 
   /* ---------- render ---------- */
 
