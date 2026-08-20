@@ -19,26 +19,33 @@ const PORT = 5555;
 const REDIRECT_URI = `http://localhost:${PORT}/callback`;
 const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 
-/** Standalone scripts do not get Next.js's .env.local loading. */
-function loadEnvLocal() {
-  const file = path.join(process.cwd(), '.env.local');
-  if (!fs.existsSync(file)) return;
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (match && !process.env[match[1]]) {
-      process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
+/**
+ * Standalone scripts do not get Next.js's env loading. Both filenames are
+ * read because Next.js honours both, so either is a reasonable place to
+ * have put the credentials.
+ */
+function loadEnvFiles() {
+  for (const name of ['.env.local', '.env']) {
+    const file = path.join(process.cwd(), name);
+    if (!fs.existsSync(file)) continue;
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      // First file wins, matching Next.js's precedence.
+      if (match && !process.env[match[1]]) {
+        process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
+      }
     }
   }
 }
 
-loadEnvLocal();
+loadEnvFiles();
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
   console.error(`
-Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.local first.
+Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.local (or .env) first.
 
   console.cloud.google.com -> APIs & Services
     1. Enable the Google Calendar API
@@ -108,7 +115,7 @@ const server = http.createServer(async (req, res) => {
   );
 
   console.log(`
-Add this to .env.local and to your host's environment variables:
+Add this to .env.local (or .env) and to your host's environment variables:
 
 GOOGLE_REFRESH_TOKEN=${body.refresh_token}
 
