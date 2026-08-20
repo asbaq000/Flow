@@ -1,8 +1,8 @@
 'use client';
 
 import type {
-  Block, Comment, Notification, Priority, ProgressUpdate, Status, Tag, TaskFull, TaskSheet,
-  User, VoiceNote,
+  Block, Comment, MeetingFull, Notification, Priority, ProgressUpdate, Status, Tag, TaskFull,
+  TaskSheet, User, VoiceNote,
 } from './types';
 
 export class ApiError extends Error {
@@ -183,6 +183,30 @@ export const api = {
   tags: {
     create: (name: string, color: string) =>
       request<{ tag: Tag }>('/api/tags', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  },
+  meetings: {
+    list: (scope: 'upcoming' | 'past' = 'upcoming') =>
+      request<{ meetings: MeetingFull[] }>(`/api/meetings?scope=${scope}`),
+    create: (input: {
+      title: string;
+      agenda?: string;
+      startsAt: number;
+      durationMin: number;
+      timeZone: string;
+      participantIds: string[];
+      taskId?: string | null;
+    }) =>
+      request<{ meeting: MeetingFull }>('/api/meetings', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    retry: (id: string) =>
+      request<{ meeting: MeetingFull }>(`/api/meetings/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'retry' }),
+      }),
+    cancel: (id: string) =>
+      request<{ meeting: MeetingFull }>(`/api/meetings/${id}`, { method: 'DELETE' }),
   },
   logout: () => request<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
 };

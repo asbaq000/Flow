@@ -166,6 +166,39 @@ CREATE TABLE IF NOT EXISTS progress_updates (
 );
 CREATE INDEX IF NOT EXISTS idx_progress_task ON progress_updates(task_id, created_at);
 
+-- Video calls. The Meet link is created against one central Google account, so
+-- nobody here ever connects a Google account of their own. Google owns the
+-- invite emails and reminders; this table owns everything the app shows.
+CREATE TABLE IF NOT EXISTS meetings (
+  id                TEXT PRIMARY KEY,
+  title             TEXT NOT NULL DEFAULT '',
+  agenda            TEXT NOT NULL DEFAULT '',
+  organizer_id      TEXT REFERENCES users(id) ON DELETE SET NULL,
+  -- Optional: a meeting can hang off the task it is about.
+  task_id           TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  starts_at         BIGINT NOT NULL,
+  duration_min      INTEGER NOT NULL DEFAULT 30,
+  -- Times are epoch milliseconds like everywhere else, but Google needs an
+  -- IANA zone alongside them, and keeping it makes a later edit survive DST.
+  time_zone         TEXT NOT NULL DEFAULT 'UTC',
+  join_url          TEXT,
+  calendar_event_id TEXT,
+  -- 'failed' means the meeting exists here but Google never took it, so the
+  -- organiser keeps their input and can retry instead of losing the form.
+  status            TEXT NOT NULL DEFAULT 'scheduled'
+                      CHECK (status IN ('scheduled','failed','cancelled')),
+  sync_error        TEXT,
+  created_at        BIGINT NOT NULL,
+  updated_at        BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(starts_at);
+
+CREATE TABLE IF NOT EXISTS meeting_participants (
+  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (meeting_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS counters (
   name  TEXT PRIMARY KEY,
   value BIGINT NOT NULL

@@ -63,6 +63,35 @@ export interface ProgressUpdate {
   author: User | null;
 }
 
+export type MeetingStatus = 'scheduled' | 'failed' | 'cancelled';
+
+export interface Meeting {
+  id: string;
+  title: string;
+  agenda: string;
+  organizer_id: string | null;
+  task_id: string | null;
+  starts_at: number;
+  duration_min: number;
+  time_zone: string;
+  /** The Google Meet URL. Null while a sync is still failing. */
+  join_url: string | null;
+  calendar_event_id: string | null;
+  status: MeetingStatus;
+  /** Why Google refused the event, shown to the organiser so they can retry. */
+  sync_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MeetingFull extends Meeting {
+  organizer: User | null;
+  participants: User[];
+  task_title?: string | null;
+}
+
+export const MEETING_DURATIONS = [15, 30, 45, 60, 90, 120] as const;
+
 export interface Task {
   id: string;
   seq: number;

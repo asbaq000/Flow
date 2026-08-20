@@ -4,13 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Archive, Bell, CalendarDays, Check, ChevronDown, Columns3, Inbox, LayoutList, Menu, Moon,
-  Plus, Search, Settings2, Sun, Table2, Users2, X,
+  Plus, Search, Settings2, Sun, Table2, Users2, Video, X,
 } from 'lucide-react';
-import type { Notification, Priority, Status, Tag, TaskFull, User } from '@/lib/types';
+import type { MeetingFull, Notification, Priority, Status, Tag, TaskFull, User } from '@/lib/types';
 import { PRIORITIES, STATUSES } from '@/lib/types';
 import { api } from '@/lib/client';
 import { useLiveEvents } from '@/lib/useLiveEvents';
-import { canSplit } from '@/lib/permissions';
+import { canScheduleMeeting, canSplit } from '@/lib/permissions';
 import { Avatar, Empty, Popover, roleShort } from './ui';
 import Sidebar from './Sidebar';
 import BoardView from './views/BoardView';
@@ -18,14 +18,16 @@ import TableView from './views/TableView';
 import ListView from './views/ListView';
 import CalendarView from './views/CalendarView';
 import PeopleView from './views/PeopleView';
+import MeetingsView from './views/MeetingsView';
 import TaskPanel from './TaskPanel';
 import NewTaskModal from './NewTaskModal';
 import SplitModal from './SplitModal';
+import ScheduleMeetingModal from './ScheduleMeetingModal';
 import NotificationsPanel from './NotificationsPanel';
 import TaskSheetPanel from './TaskSheetPanel';
 
 export type ViewKind = 'board' | 'table' | 'list' | 'calendar';
-export type Section = 'all' | 'inbox' | 'mine' | 'created' | 'archived' | 'people';
+export type Section = 'all' | 'inbox' | 'mine' | 'created' | 'archived' | 'people' | 'meetings';
 export type GroupBy = 'status' | 'assignee' | 'priority';
 
 export interface Filters {
@@ -72,6 +74,10 @@ export default function Workspace({
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [search, setSearch] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+
+  const [meetings, setMeetings] = useState<MeetingFull[]>([]);
+  const [meetingsLoading, setMeetingsLoading] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -138,9 +144,27 @@ export default function Workspace({
     }
   }, []);
 
+  const refreshMeetings = useCallback(async () => {
+    setMeetingsLoading(true);
+    try {
+      const data = await api.meetings.list('upcoming');
+      setMeetings(data.meetings);
+    } catch {
+      /* transient — the next visit or live event picks it up */
+    } finally {
+      setMeetingsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     refresh();
   }, [section, refresh]);
+
+  // Only fetched when the section is actually open — meetings are not part of
+  // the board payload, so nobody pays for them until they look.
+  useEffect(() => {
+    if (section === 'meetings') refreshMeetings();
+  }, [section, refreshMeetings]);
 
   /*
    * Live updates over Server-Sent Events. The server only ever says "something
@@ -163,8 +187,12 @@ export default function Workspace({
           refresh();
           refreshNotifications();
         }
+        if (event.type === 'meeting.created' || event.type === 'meeting.updated') {
+          refreshMeetings();
+          refreshNotifications();
+        }
       },
-      [refresh, refreshNotifications]
+      [refresh, refreshNotifications, refreshMeetings]
     )
   );
 
@@ -397,12 +425,19 @@ export default function Workspace({
 
           <h1 className="truncate text-[14px] font-semibold">{sectionTitle(section)}</h1>
           <span className="hidden rounded bg-[var(--bg-active)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--text-secondary)] sm:inline">
-            {visible.length}
+            {section === 'meetings' ? meetings.length : visible.length}
           </span>
 
           <div className="flex-1" />
 
-          {section !== 'people' && (
+          {section === 'meetings' && canScheduleMeeting(me) && (
+            <button onClick={() => setScheduleOpen(true)} className="btn btn-primary py-1 text-[12.5px]">
+              <Video size={13} />
+              <span className="hidden sm:inline">Schedule meeting</span>
+            </button>
+          )}
+
+          {section !== 'people' && section !== 'meetings' && (
             <>
               {/* view switcher */}
               <div className="flex shrink-0 items-center gap-0.5 rounded-md p-0.5" style={{ background: 'var(--bg-subtle)' }}>
@@ -557,6 +592,14 @@ export default function Workspace({
         <div className="min-h-0 flex-1 overflow-hidden">
           {section === 'people' ? (
             <PeopleView me={me} onChanged={() => refresh()} onOpenSheet={setSheetUserId} />
+          ) : section === 'meetings' ? (
+            <MeetingsView
+              meetings={meetings}
+              me={me}
+              loading={meetingsLoading}
+              onChanged={refreshMeetings}
+              onOpenTask={setOpenTaskId}
+            />
           ) : visible.length === 0 ? (
             <Empty
               icon={section === 'inbox' ? <Inbox size={30} /> : <Archive size={30} />}
@@ -591,6 +634,23 @@ export default function Workspace({
       </main>
 
       {/* ---- overlays ---- */}
+      {scheduleOpen && (
+        <ScheduleMeetingModal
+          users={users}
+          me={me}
+          onClose={() => setScheduleOpen(false)}
+          onScheduled={(meeting) => {
+            setScheduleOpen(false);
+            setMeetings((prev) => [...prev, meeting].sort((a, b) => a.starts_at - b.starts_at));
+            flash(
+              meeting.join_url
+                ? 'Meeting scheduled — invites are on their way'
+                : 'Meeting saved, but Google did not issue a link. Try again from the card.'
+            );
+          }}
+        />
+      )}
+
       {openTask && (
         <TaskPanel
           taskId={openTask.id}
@@ -780,6 +840,7 @@ const sectionTitle = (s: Section) =>
     created: 'Raised by me',
     archived: 'Archive',
     people: 'People',
+    meetings: 'Meetings',
   })[s];
 
 function emptyTitle(section: Section, filtered: boolean) {
@@ -791,6 +852,7 @@ function emptyTitle(section: Section, filtered: boolean) {
     created: 'You have not raised anything yet',
     archived: 'Archive is empty',
     people: '',
+    meetings: '',
   }[section];
 }
 

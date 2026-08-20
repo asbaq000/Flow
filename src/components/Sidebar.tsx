@@ -2,7 +2,7 @@
 
 import {
   Archive, ChevronsLeft, ClipboardList, Inbox, LayoutGrid, LogOut, Moon, PenLine, Plus, Sun,
-  User as UserIcon, Users2,
+  User as UserIcon, Users2, Video,
 } from 'lucide-react';
 import type { User } from '@/lib/types';
 import type { Section } from './Workspace';
@@ -35,6 +35,7 @@ export default function Sidebar({
     { id: 'created', label: 'Raised by me', icon: <PenLine size={15} />, badge: counts.created, show: true },
     { id: 'all', label: 'All tasks', icon: <LayoutGrid size={15} />, show: isLead },
     { id: 'archived', label: 'Archive', icon: <Archive size={15} />, show: true },
+    { id: 'meetings', label: 'Meetings', icon: <Video size={15} />, show: true },
     { id: 'people', label: 'People', icon: <Users2 size={15} />, show: true },
   ];
 

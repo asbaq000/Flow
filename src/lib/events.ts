@@ -18,6 +18,8 @@ export type FlowEventType =
   | 'voice.added'
   | 'voice.removed'
   | 'voice.transcribed'
+  | 'meeting.created'
+  | 'meeting.updated'
   | 'notification';
 
 export interface FlowEvent {

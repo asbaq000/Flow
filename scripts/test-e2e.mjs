@@ -579,6 +579,75 @@ console.log('\nOffboarding someone who left');
   await call(ceo, `/api/tasks/${tid}`, { method: 'DELETE' });
 }
 
+/* ---------- meetings ---------- */
+console.log('\nScheduling meetings');
+{
+  const startsAt = Date.now() + 3600_000;
+  const body = {
+    title: `E2E — sprint planning ${RUN}`,
+    agenda: 'Plan the week',
+    startsAt,
+    durationMin: 30,
+    timeZone: 'Asia/Karachi',
+    participantIds: [dev.user.id, otherDev.user.id],
+  };
+
+  ok('a Developer cannot schedule a meeting',
+     (await call(dev, '/api/meetings', { method: 'POST', body: JSON.stringify(body) })).status === 403);
+  ok('a Manager cannot schedule a meeting',
+     (await call(manager, '/api/meetings', { method: 'POST', body: JSON.stringify(body) })).status === 403);
+
+  const made = await call(lead, '/api/meetings', { method: 'POST', body: JSON.stringify(body) });
+  ok('a Team Lead can schedule a meeting', made.status === 201, String(made.status));
+
+  const meeting = made.body.meeting;
+  ok('it keeps the time it was given', meeting?.starts_at === startsAt);
+  ok('it keeps the organiser timezone', meeting?.time_zone === 'Asia/Karachi');
+  ok('the organiser is in the room too',
+     meeting?.participants?.some((p) => p.id === lead.user.id));
+  ok('everyone invited is on it',
+     [dev.user.id, otherDev.user.id].every((id) => meeting?.participants?.some((p) => p.id === id)));
+
+  /*
+   * Google is not configured in the test environment, which is the point: the
+   * meeting must still persist with the reason attached rather than vanish.
+   */
+  ok('an unreachable Google leaves the meeting saved, not lost', meeting?.status === 'failed',
+     meeting?.status);
+  ok('the reason is recorded for the organiser', Boolean(meeting?.sync_error));
+
+  ok('a title is required',
+     (await call(lead, '/api/meetings',
+       { method: 'POST', body: JSON.stringify({ ...body, title: '  ' }) })).status === 400);
+  ok('somebody has to be invited',
+     (await call(lead, '/api/meetings',
+       { method: 'POST', body: JSON.stringify({ ...body, participantIds: [] }) })).status === 400);
+  ok('the length has to be one we offer',
+     (await call(lead, '/api/meetings',
+       { method: 'POST', body: JSON.stringify({ ...body, durationMin: 37 }) })).status === 400);
+
+  ok('an invited developer sees it',
+     (await call(dev, '/api/meetings')).body.meetings?.some((m) => m.id === meeting.id));
+  ok('an uninvited manager does not',
+     !(await call(manager2, '/api/meetings')).body.meetings?.some((m) => m.id === meeting.id));
+  ok('an invited developer can open it',
+     (await call(dev, `/api/meetings/${meeting.id}`)).status === 200);
+  ok('an uninvited manager cannot',
+     (await call(manager2, `/api/meetings/${meeting.id}`)).status === 403);
+
+  ok('an invited developer cannot cancel it',
+     (await call(dev, `/api/meetings/${meeting.id}`, { method: 'DELETE' })).status === 403);
+
+  const cancelled = await call(lead, `/api/meetings/${meeting.id}`, { method: 'DELETE' });
+  ok('the organiser can cancel it', cancelled.status === 200, String(cancelled.status));
+  ok('it reads as cancelled afterwards', cancelled.body.meeting?.status === 'cancelled');
+  ok('a cancelled meeting drops out of what is upcoming',
+     !(await call(lead, '/api/meetings')).body.meetings?.some((m) => m.id === meeting.id));
+  ok('a cancelled meeting cannot be retried',
+     (await call(lead, `/api/meetings/${meeting.id}`,
+       { method: 'PATCH', body: JSON.stringify({ action: 'retry' }) })).status === 400);
+}
+
 console.log('\nCleanup');
 ok('the CEO can delete the test task', (await call(ceo, `/api/tasks/${task.id}`, { method: 'DELETE' })).status === 200);
 ok('subtasks cascade away with the parent', (await call(lead, `/api/tasks/${split.body.task.subtasks[0].id}`)).status === 404);

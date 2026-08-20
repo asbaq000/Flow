@@ -63,6 +63,20 @@ export function canSplit(user: User, task: TaskFull): boolean {
 }
 
 /* ------------------------------------------------------------------ */
+/* Meetings                                                            */
+/* ------------------------------------------------------------------ */
+
+/** Calling the team together is a coordination act, so it sits with the Leads. */
+export function canScheduleMeeting(user: User): boolean {
+  return isLead(user);
+}
+
+/** The organiser can call off their own meeting; so can any Lead or the CEO. */
+export function canCancelMeeting(user: User, meeting: { organizer_id: string | null }): boolean {
+  return isLead(user) || meeting.organizer_id === user.id;
+}
+
+/* ------------------------------------------------------------------ */
 /* The review gate                                                     */
 /* ------------------------------------------------------------------ */
 

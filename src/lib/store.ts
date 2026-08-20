@@ -1,13 +1,15 @@
 import { many, one, run, tx, nextTaskSeq } from './pg';
 import { newId } from './ids';
 import type {
-  ActivityItem, Comment, Notification, Priority, ProgressKind, ProgressUpdate, SheetEntry,
-  Status, Tag, Task, TaskFull, TaskLink, TaskSheet, User, VoiceNote,
+  ActivityItem, Comment, Meeting, MeetingFull, MeetingStatus, Notification, Priority,
+  ProgressKind, ProgressUpdate, SheetEntry, Status, Tag, Task, TaskFull, TaskLink,
+  TaskSheet, User, VoiceNote,
 } from './types';
 import { docToPlain } from './types';
 import { normalizeUrl } from './url';
 import { publish } from './events';
 import { appUrl, sendMail } from './email';
+import { cancelMeetEvent, createMeetEvent, googleCalendarEnabled } from './googleCalendar';
 
 const USER_COLS = 'id, email, name, role, avatar_color, title, created_at';
 
@@ -878,6 +880,219 @@ export async function requestChanges(
   }
 
   return getTask(taskId);
+}
+
+/* ------------------------------------------------------------------ */
+/* Meetings                                                            */
+/* ------------------------------------------------------------------ */
+
+const MEETING_COLS = `id, title, agenda, organizer_id, task_id, starts_at, duration_min,
+                      time_zone, join_url, calendar_event_id, status, sync_error,
+                      created_at, updated_at`;
+
+async function hydrateMeeting(row: Meeting): Promise<MeetingFull> {
+  const [organizer, participants, task] = await Promise.all([
+    getUser(row.organizer_id),
+    many<User>(
+      `SELECT u.id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at
+       FROM users u JOIN meeting_participants mp ON mp.user_id = u.id
+       WHERE mp.meeting_id = ? ORDER BY u.name`,
+      [row.id]
+    ),
+    row.task_id
+      ? one<{ title: string }>('SELECT title FROM tasks WHERE id = ?', [row.task_id])
+      : Promise.resolve(null),
+  ]);
+
+  return { ...row, organizer, participants, task_title: task?.title ?? null };
+}
+
+export async function getMeeting(id: string): Promise<MeetingFull | null> {
+  const row = await one<Meeting>(`SELECT ${MEETING_COLS} FROM meetings WHERE id = ?`, [id]);
+  return row ? hydrateMeeting(row) : null;
+}
+
+/**
+ * Leads and the CEO see every meeting; everyone else sees only the ones they
+ * were actually invited to, matching how task visibility already works.
+ */
+export async function listMeetings(opts: {
+  forUserId?: string | null;
+  scope?: 'upcoming' | 'past';
+} = {}): Promise<MeetingFull[]> {
+  const params: unknown[] = [];
+  const where: string[] = [];
+
+  if (opts.forUserId) {
+    where.push(
+      `(organizer_id = ? OR EXISTS (
+          SELECT 1 FROM meeting_participants mp
+          WHERE mp.meeting_id = meetings.id AND mp.user_id = ?))`
+    );
+    params.push(opts.forUserId, opts.forUserId);
+  }
+
+  // A call stays "upcoming" until it would actually have ended, so nobody
+  // loses the join button on a meeting they are running late to.
+  if (opts.scope === 'upcoming') {
+    where.push(`status <> 'cancelled' AND (starts_at + duration_min * 60000) >= ?`);
+    params.push(Date.now());
+  } else if (opts.scope === 'past') {
+    where.push(`(status = 'cancelled' OR (starts_at + duration_min * 60000) < ?)`);
+    params.push(Date.now());
+  }
+
+  const rows = await many<Meeting>(
+    `SELECT ${MEETING_COLS} FROM meetings
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY starts_at ${opts.scope === 'past' ? 'DESC' : 'ASC'}`,
+    params
+  );
+  return Promise.all(rows.map(hydrateMeeting));
+}
+
+export interface MeetingInput {
+  title: string;
+  agenda?: string;
+  startsAt: number;
+  durationMin: number;
+  timeZone: string;
+  participantIds: string[];
+  taskId?: string | null;
+}
+
+/**
+ * Books the call. The Google event is attempted first, but a failure there
+ * never discards the meeting: it is stored as 'failed' with the reason, so the
+ * organiser can retry instead of retyping everything.
+ */
+export async function createMeeting(actor: User, input: MeetingInput): Promise<MeetingFull> {
+  // The organiser is always in the room, whether or not they picked themselves.
+  const ids = Array.from(new Set([...input.participantIds, actor.id]));
+  const people = await many<User>(
+    `SELECT ${USER_COLS} FROM users WHERE id IN (${ids.map(() => '?').join(',')})`,
+    ids
+  );
+
+  let joinUrl: string | null = null;
+  let eventId: string | null = null;
+  let status: MeetingStatus = 'scheduled';
+  let syncError: string | null = null;
+
+  if (!googleCalendarEnabled) {
+    status = 'failed';
+    syncError = 'Google Calendar is not configured on this install.';
+  } else {
+    try {
+      const created = await createMeetEvent({
+        title: input.title,
+        agenda: input.agenda ?? '',
+        startsAt: input.startsAt,
+        durationMin: input.durationMin,
+        timeZone: input.timeZone,
+        attendeeEmails: people.map((p) => p.email),
+      });
+      joinUrl = created.joinUrl;
+      eventId = created.eventId;
+    } catch (err) {
+      status = 'failed';
+      syncError = err instanceof Error ? err.message : 'Google Calendar rejected the meeting.';
+      console.error('[meetings] could not create the Google event:', syncError);
+    }
+  }
+
+  const id = newId('m_');
+  const now = Date.now();
+
+  await run(
+    `INSERT INTO meetings (id, title, agenda, organizer_id, task_id, starts_at, duration_min,
+                           time_zone, join_url, calendar_event_id, status, sync_error,
+                           created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [
+      id, input.title.trim().slice(0, 200), (input.agenda ?? '').trim().slice(0, 4000),
+      actor.id, input.taskId ?? null, input.startsAt, input.durationMin, input.timeZone,
+      joinUrl, eventId, status, syncError, now, now,
+    ]
+  );
+
+  if (people.length) {
+    await run(
+      `INSERT INTO meeting_participants (meeting_id, user_id)
+       VALUES ${people.map(() => '(?,?)').join(',')} ON CONFLICT DO NOTHING`,
+      people.flatMap((p) => [id, p.id])
+    );
+  }
+
+  // Google emails the calendar invite; this is the nudge inside the app.
+  for (const person of people) {
+    await notify(person.id, actor.id, 'meeting', input.taskId ?? null, null,
+      `${actor.name} invited you to "${input.title.trim()}"`);
+  }
+
+  publish({ type: 'meeting.created', taskId: input.taskId ?? null, actorId: actor.id });
+  return (await getMeeting(id))!;
+}
+
+/** Retries a meeting whose Google event never got created. */
+export async function retryMeetingSync(actor: User, id: string): Promise<MeetingFull | null> {
+  const meeting = await getMeeting(id);
+  if (!meeting || meeting.status === 'cancelled') return null;
+  if (meeting.join_url) return meeting;
+
+  let patch: [string | null, string | null, MeetingStatus, string | null];
+  try {
+    const created = await createMeetEvent({
+      title: meeting.title,
+      agenda: meeting.agenda,
+      startsAt: meeting.starts_at,
+      durationMin: meeting.duration_min,
+      timeZone: meeting.time_zone,
+      attendeeEmails: meeting.participants.map((p) => p.email),
+    });
+    patch = [created.joinUrl, created.eventId, 'scheduled', null];
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Google Calendar rejected the meeting.';
+    patch = [null, null, 'failed', message];
+  }
+
+  await run(
+    `UPDATE meetings SET join_url = ?, calendar_event_id = ?, status = ?, sync_error = ?,
+                         updated_at = ? WHERE id = ?`,
+    [...patch, Date.now(), id]
+  );
+
+  publish({ type: 'meeting.updated', taskId: meeting.task_id, actorId: actor.id });
+  return getMeeting(id);
+}
+
+export async function cancelMeeting(actor: User, id: string): Promise<MeetingFull | null> {
+  const meeting = await getMeeting(id);
+  if (!meeting) return null;
+
+  if (meeting.calendar_event_id) {
+    try {
+      await cancelMeetEvent(meeting.calendar_event_id);
+    } catch (err) {
+      // The call is off either way — record why Google still lists it rather
+      // than leaving the meeting stuck as active in our own UI.
+      console.error('[meetings] could not cancel the Google event:',
+        err instanceof Error ? err.message : err);
+    }
+  }
+
+  await run(
+    `UPDATE meetings SET status = 'cancelled', updated_at = ? WHERE id = ?`,
+    [Date.now(), id]
+  );
+
+  for (const person of meeting.participants) {
+    await notify(person.id, actor.id, 'meeting', meeting.task_id, null,
+      `${actor.name} cancelled "${meeting.title}"`);
+  }
+
+  publish({ type: 'meeting.updated', taskId: meeting.task_id, actorId: actor.id });
+  return getMeeting(id);
 }
 
 /* ------------------------------------------------------------------ */
