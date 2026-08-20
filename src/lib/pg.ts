@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 /**
  * One database interface, two backends.
@@ -169,9 +170,36 @@ async function connect(): Promise<Db> {
 
 async function migrate(db: Db) {
   const sql = fs.readFileSync(SCHEMA_PATH, 'utf8');
-  // The schema is entirely CREATE ... IF NOT EXISTS, so this is safe to
-  // re-run on every cold start and needs no version bookkeeping.
+
+  /*
+   * The schema is entirely CREATE ... IF NOT EXISTS, so re-running it is
+   * always safe. It is not always cheap: every cold start would otherwise
+   * pay for a few dozen catalog checks before serving its first request,
+   * and serverless cold-starts often. Stamping the applied schema lets an
+   * unchanged one be skipped, while any edit to the file re-applies itself
+   * automatically — no migration files to write or remember.
+   *
+   * Every failure path falls through to applying the schema, so the worst
+   * a bad stamp can cost is the work this was meant to save.
+   */
+  const stamp = createHash('sha1').update(sql).digest('hex');
+
+  try {
+    await db.run(
+      'CREATE TABLE IF NOT EXISTS schema_meta (id INT PRIMARY KEY, applied TEXT NOT NULL)'
+    );
+    const row = await db.one<{ applied: string }>('SELECT applied FROM schema_meta WHERE id = 1');
+    if (row?.applied === stamp) return;
+  } catch {
+    // First run, or the marker is unreadable — fall through and apply.
+  }
+
   await db.exec(sql);
+  await db.run(
+    `INSERT INTO schema_meta (id, applied) VALUES (1, ?)
+     ON CONFLICT (id) DO UPDATE SET applied = EXCLUDED.applied`,
+    [stamp]
+  );
 }
 
 /** Opened once per process, lazily. */
