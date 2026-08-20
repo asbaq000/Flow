@@ -426,8 +426,8 @@ export async function addComment(actor: User, taskId: string, body: string): Pro
     [id, taskId, actor.id, body, now, now]
   );
 
-  const task = await one<{ title: string; assignee_id: string | null; creator_id: string }>(
-    'SELECT title, assignee_id, creator_id FROM tasks WHERE id = ?',
+  const task = await one<{ seq: number; title: string; assignee_id: string | null; creator_id: string }>(
+    'SELECT seq, title, assignee_id, creator_id FROM tasks WHERE id = ?',
     [taskId]
   );
   const title = task ? task.title : 'a task';
@@ -440,6 +440,7 @@ export async function addComment(actor: User, taskId: string, body: string): Pro
     if (notified.has(userId)) continue;
     notified.add(userId);
     await notify(userId, actor.id, 'mention', taskId, id, `${actor.name} mentioned you on "${title}"`);
+    if (task) void emailMention(actor, userId, { id: taskId, seq: task.seq, title }, body);
   }
   for (const participant of [task?.assignee_id, task?.creator_id]) {
     if (!participant || notified.has(participant)) continue;
@@ -689,6 +690,16 @@ export async function addProgressUpdate(
   await logActivity(taskId, actor.id, `progress_${kind}`, { percent });
   publish({ type: 'progress.added', taskId, actorId: actor.id });
 
+  // A plain update (as opposed to a submission, which has its own review
+  // notice) is still something leads should hear about without polling.
+  if (kind === 'update') {
+    const task = await one<{ seq: number; title: string }>(
+      'SELECT seq, title FROM tasks WHERE id = ?',
+      [taskId]
+    );
+    if (task) void emailProgressPosted(actor, { id: taskId, seq: task.seq, title: task.title });
+  }
+
   const row = (await one<ProgressUpdate>(
     `SELECT ${PROGRESS_COLS} FROM progress_updates WHERE id = ?`,
     [id]
@@ -715,6 +726,7 @@ export async function submitForReview(
     await notify(r.id, actor.id, 'review_requested', taskId, null,
       `${actor.name} submitted "${task.title}" for review`);
   }
+  void emailReviewRequested(actor, { id: taskId, seq: task.seq, title: task.title });
 
   return getTask(taskId);
 }
@@ -733,6 +745,7 @@ export async function approveSubmission(
   if (task.assignee_id) {
     await notify(task.assignee_id, actor.id, 'approved', taskId, null,
       `${actor.name} approved "${task.title}" — it is done`);
+    void emailTaskDone(actor, task.assignee_id, { id: taskId, seq: task.seq, title: task.title });
   }
   if (task.creator_id && task.creator_id !== task.assignee_id) {
     await notify(task.creator_id, actor.id, 'approved', taskId, null,
@@ -873,6 +886,94 @@ export async function emailAssignment(
     body: `${actor.name} assigned you "${task.title}" (TSK-${task.seq}).\n\nOpen it to see the brief, report progress, and submit it for review when it is ready.`,
     action: { label: 'Open the task', url: `${appUrl}/workspace?task=${task.id}` },
     footer: 'You are receiving this because the task was assigned to you in Flow.',
+  });
+}
+
+/** Anyone @mentioned in a comment gets an email — regardless of their role. */
+export async function emailMention(
+  actor: User,
+  userId: string,
+  task: { id: string; seq: number; title: string },
+  commentBody: string
+) {
+  if (userId === actor.id) return;
+  const target = await getUser(userId);
+  if (!target) return;
+
+  const plain = commentBody.replace(MENTION_RE, (_m, name: string) => `@${name}`).trim();
+
+  await sendMail({
+    to: target.email,
+    subject: `${actor.name} mentioned you on TSK-${task.seq}: ${task.title}`,
+    heading: 'You were mentioned',
+    body: `${actor.name} mentioned you on "${task.title}" (TSK-${task.seq}):\n\n"${plain}"`,
+    action: { label: 'Open the task', url: `${appUrl}/workspace?task=${task.id}` },
+    footer: 'You are receiving this because you were mentioned in a comment on Flow.',
+  });
+}
+
+/** Every Team Lead/CEO gets word the moment a developer submits work or reports progress. */
+async function emailLeads(
+  actor: User,
+  task: { id: string; seq: number; title: string },
+  subject: string,
+  heading: string,
+  body: string
+) {
+  const leads = await many<{ id: string; email: string }>(
+    `SELECT id, email FROM users WHERE role IN ('TEAM_LEAD','CEO')`
+  );
+  await Promise.all(
+    leads
+      .filter((l) => l.id !== actor.id)
+      .map((l) =>
+        sendMail({
+          to: l.email,
+          subject,
+          heading,
+          body,
+          action: { label: 'Review the task', url: `${appUrl}/workspace?task=${task.id}` },
+          footer: 'You are receiving this because you can review work in Flow.',
+        })
+      )
+  );
+}
+
+/** A developer submitted a task and is waiting on a Team Lead/CEO to review it. */
+export async function emailReviewRequested(actor: User, task: { id: string; seq: number; title: string }) {
+  await emailLeads(
+    actor,
+    task,
+    `${actor.name} submitted TSK-${task.seq} for review`,
+    'A task is waiting on your review',
+    `${actor.name} submitted "${task.title}" (TSK-${task.seq}) for review.\n\nTake a look and either approve it or send it back with changes.`
+  );
+}
+
+/** A developer posted a progress update (without submitting) — leads should still see it. */
+export async function emailProgressPosted(actor: User, task: { id: string; seq: number; title: string }) {
+  await emailLeads(
+    actor,
+    task,
+    `${actor.name} posted an update on TSK-${task.seq}`,
+    'A task got a progress update',
+    `${actor.name} posted a progress update on "${task.title}" (TSK-${task.seq}).`
+  );
+}
+
+/** The assignee finds out their submitted work was approved and the task is done. */
+export async function emailTaskDone(actor: User, assigneeId: string, task: { id: string; seq: number; title: string }) {
+  if (assigneeId === actor.id) return;
+  const assignee = await getUser(assigneeId);
+  if (!assignee) return;
+
+  await sendMail({
+    to: assignee.email,
+    subject: `${actor.name} approved TSK-${task.seq}: ${task.title}`,
+    heading: 'Your task was approved',
+    body: `${actor.name} approved "${task.title}" (TSK-${task.seq}) — it is done.`,
+    action: { label: 'Open the task', url: `${appUrl}/workspace?task=${task.id}` },
+    footer: 'You are receiving this because you were the assignee on this task in Flow.',
   });
 }
 
