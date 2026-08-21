@@ -42,6 +42,8 @@ const MODEL_ID = pickModel();
 /** Whisper hears 30s at a time; longer audio must be fed as overlapping windows. */
 const CHUNK_SECONDS = 30;
 const CHUNK_OVERLAP_SECONDS = 5;
+/** The rate useTranscriber decodes to before handing the audio over. */
+const SAMPLE_RATE = 16_000;
 
 let transcriberPromise: Promise<AutomaticSpeechRecognitionPipeline> | null = null;
 
@@ -76,25 +78,31 @@ self.onmessage = async (event: MessageEvent<TranscribeRequest>) => {
     const transcriber = await getTranscriber();
     postMessage({ type: 'loaded' });
 
+    /*
+     * Chunking only for audio that actually exceeds the model's window.
+     * Below it, the plain single pass is the path that has always worked,
+     * and the stitching logic is pure risk on a fifteen-second note.
+     */
+    const seconds = audio.length / SAMPLE_RATE;
+    const longForm = seconds > CHUNK_SECONDS;
+
     // No `language` option: letting Whisper auto-detect is what lets one
     // recorder handle both English and Urdu without the user choosing.
     const output = await transcriber(audio, {
       task: 'transcribe',
       /*
-       * Without chunking, anything past the model's 30s window is silently
-       * dropped — a two-minute note would transcribe only its opening.
-       * Overlapping windows are stitched back together by the pipeline.
-       */
-      chunk_length_s: CHUNK_SECONDS,
-      stride_length_s: CHUNK_OVERLAP_SECONDS,
-      /*
-       * Whisper's characteristic failure is looping a phrase forever once it
-       * loses the thread, especially on silence or background noise. Greedy
-       * decoding keeps it fast enough to be usable at this model size, and
-       * blocking repeated 3-grams stops the loop.
+       * Deliberately NOT setting no_repeat_ngram_size. Blocking repeated
+       * n-grams looks like a cure for Whisper's phrase-looping, but real
+       * speech repeats short runs constantly, so the ban grows over a
+       * transcript until every sensible continuation is forbidden and
+       * greedy decoding falls back on whatever is left — punctuation. It
+       * turned clear speech into ",,,,, ,,, ,". Whisper handles repetition
+       * on its own; this option makes it much worse than it fixes.
        */
       temperature: 0,
-      no_repeat_ngram_size: 3,
+      ...(longForm
+        ? { chunk_length_s: CHUNK_SECONDS, stride_length_s: CHUNK_OVERLAP_SECONDS }
+        : {}),
     });
     const text = Array.isArray(output) ? output.map((o) => o.text).join(' ') : output.text;
 
