@@ -158,8 +158,14 @@ export function canArchive(user: User, task: TaskFull): boolean {
   return isLead(user) || (task.creator_id === user.id && task.status === 'TRIAGE');
 }
 
+/**
+ * Deleting is permanent and takes the comments, recordings and history with
+ * it, so it stays with the people who run the board — a Team Lead or the CEO.
+ * Anyone else may still delete something they raised themselves, but only
+ * while it is untouched in triage.
+ */
 export function canDelete(user: User, task: TaskFull): boolean {
-  return isCeo(user) || (task.creator_id === user.id && task.status === 'TRIAGE');
+  return isLead(user) || (task.creator_id === user.id && task.status === 'TRIAGE');
 }
 
 /** Only the CEO reshapes the org chart. */

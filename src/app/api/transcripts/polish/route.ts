@@ -1,6 +1,8 @@
 import { currentUser } from '@/lib/auth';
 import { fail, ok, readJson } from '@/lib/api';
-import { cleanTranscript, openRouterEnabled, writeMinutes } from '@/lib/openrouter';
+import {
+  cleanTranscript, openRouterEnabled, openRouterModel, writeMinutes,
+} from '@/lib/openrouter';
 
 /**
  * Tidies a transcript, or writes minutes from one.
@@ -9,6 +11,27 @@ import { cleanTranscript, openRouterEnabled, writeMinutes } from '@/lib/openrout
  * readable by anyone with devtools. So the browser sends the text it heard and
  * gets back a better version of it.
  */
+
+/**
+ * Says whether the language model is actually wired up here.
+ *
+ * Polishing fails soft by design, so a missing key looks exactly like a rough
+ * transcript — which makes "why is this still bad?" impossible to answer from
+ * the outside. This turns that into a question anyone can check, without ever
+ * exposing the key itself.
+ */
+export async function GET() {
+  const user = await currentUser();
+  if (!user) return fail('Not signed in', 401);
+
+  return ok({
+    configured: openRouterEnabled,
+    model: openRouterModel,
+    hint: openRouterEnabled
+      ? 'Transcripts are being cleaned up by the language model.'
+      : 'No OPENROUTER_API_KEY here, so transcripts are saved exactly as the speech model heard them.',
+  });
+}
 
 interface Body {
   text?: string;

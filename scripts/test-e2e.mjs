@@ -490,6 +490,38 @@ console.log('\nVoice transcription (transcribing itself runs in the browser; thi
 }
 
 /* ---------- polishing transcripts ---------- */
+/* ---------- who may delete a task ---------- */
+console.log('\nDeleting a task');
+{
+  const raised = await call(manager, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — delete rules ${RUN}` }) });
+  const id = raised.body.task.id;
+
+  // It is assigned and under way, so the "my own untouched draft" escape
+  // hatch no longer applies to anyone.
+  await call(lead, `/api/tasks/${id}`, {
+    method: 'PATCH', body: JSON.stringify({ assigneeId: dev.user.id }) });
+  await call(dev, `/api/tasks/${id}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'IN_PROGRESS' }) });
+
+  ok('the developer working on it cannot delete it',
+     (await call(dev, `/api/tasks/${id}`, { method: 'DELETE' })).status === 403);
+  ok('the manager who raised it cannot delete it once it is under way',
+     (await call(manager, `/api/tasks/${id}`, { method: 'DELETE' })).status === 403);
+  ok('an uninvolved manager cannot delete it',
+     (await call(manager2, `/api/tasks/${id}`, { method: 'DELETE' })).status === 403);
+
+  ok('a Team Lead CAN delete it',
+     (await call(lead, `/api/tasks/${id}`, { method: 'DELETE' })).status === 200);
+  ok('and it is really gone', (await call(ceo, `/api/tasks/${id}`)).status === 404);
+
+  // The escape hatch still stands for something nobody has touched.
+  const draft = await call(manager, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — own draft ${RUN}` }) });
+  ok('somebody can still delete their own untouched request',
+     (await call(manager, `/api/tasks/${draft.body.task.id}`, { method: 'DELETE' })).status === 200);
+}
+
 console.log('\nPolishing transcripts');
 {
   ok('signing out blocks it',
