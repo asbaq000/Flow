@@ -77,6 +77,7 @@ export default function Workspace({
 
   const [meetings, setMeetings] = useState<MeetingFull[]>([]);
   const [meetingsLoading, setMeetingsLoading] = useState(false);
+  const [meetingScope, setMeetingScope] = useState<'upcoming' | 'past'>('upcoming');
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
@@ -147,14 +148,14 @@ export default function Workspace({
   const refreshMeetings = useCallback(async () => {
     setMeetingsLoading(true);
     try {
-      const data = await api.meetings.list('upcoming');
+      const data = await api.meetings.list(meetingScope);
       setMeetings(data.meetings);
     } catch {
       /* transient — the next visit or live event picks it up */
     } finally {
       setMeetingsLoading(false);
     }
-  }, []);
+  }, [meetingScope]);
 
   useEffect(() => {
     refresh();
@@ -597,6 +598,8 @@ export default function Workspace({
               meetings={meetings}
               me={me}
               loading={meetingsLoading}
+              scope={meetingScope}
+              onScope={setMeetingScope}
               onChanged={refreshMeetings}
               onOpenTask={setOpenTaskId}
             />

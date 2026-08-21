@@ -644,11 +644,70 @@ console.log('\nScheduling meetings');
   ok('an invited developer cannot cancel it',
      (await call(dev, `/api/meetings/${meeting.id}`, { method: 'DELETE' })).status === 403);
 
+  /* ---- minutes and attendance ---- */
+  const minutesBody = JSON.stringify({ action: 'minutes', minutes: 'Agreed the Okta rollout order.' });
+  ok('an invited developer cannot write the minutes',
+     (await call(dev, `/api/meetings/${meeting.id}`, { method: 'PATCH', body: minutesBody })).status === 403);
+
+  const written = await call(lead, `/api/meetings/${meeting.id}`, { method: 'PATCH', body: minutesBody });
+  ok('the organiser can write the minutes', written.status === 200, String(written.status));
+  ok('the minutes come back with the meeting',
+     written.body.meeting?.minutes === 'Agreed the Okta rollout order.');
+  ok('the minutes record who wrote them', written.body.meeting?.minutes_author_id === lead.user.id);
+  ok('the minutes record when', Number(written.body.meeting?.minutes_updated_at) > 0);
+
+  ok('everyone starts unmarked, which is not the same as absent',
+     written.body.meeting?.participants?.every((p) => p.attended === null));
+
+  const marked = await call(lead, `/api/meetings/${meeting.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ action: 'attendance', userId: dev.user.id, attended: true }),
+  });
+  ok('attendance can be marked', marked.status === 200, String(marked.status));
+  ok('the person marked reads as having joined',
+     marked.body.meeting?.participants?.find((p) => p.id === dev.user.id)?.attended === 1);
+  ok('marking one person leaves the others unmarked',
+     marked.body.meeting?.participants?.find((p) => p.id === otherDev.user.id)?.attended === null);
+
+  const absent = await call(lead, `/api/meetings/${meeting.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ action: 'attendance', userId: otherDev.user.id, attended: false }),
+  });
+  ok('somebody can be marked as not having joined',
+     absent.body.meeting?.participants?.find((p) => p.id === otherDev.user.id)?.attended === 0);
+
+  const cleared = await call(lead, `/api/meetings/${meeting.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ action: 'attendance', userId: otherDev.user.id, attended: null }),
+  });
+  ok('a mark can be cleared back to unrecorded',
+     cleared.body.meeting?.participants?.find((p) => p.id === otherDev.user.id)?.attended === null);
+
+  ok('somebody not on the meeting cannot be marked',
+     (await call(lead, `/api/meetings/${meeting.id}`, {
+       method: 'PATCH',
+       body: JSON.stringify({ action: 'attendance', userId: manager2.user.id, attended: true }),
+     })).status === 404);
+
+  ok('an invited developer cannot mark attendance',
+     (await call(dev, `/api/meetings/${meeting.id}`, {
+       method: 'PATCH',
+       body: JSON.stringify({ action: 'attendance', userId: dev.user.id, attended: true }),
+     })).status === 403);
+
   const cancelled = await call(lead, `/api/meetings/${meeting.id}`, { method: 'DELETE' });
   ok('the organiser can cancel it', cancelled.status === 200, String(cancelled.status));
   ok('it reads as cancelled afterwards', cancelled.body.meeting?.status === 'cancelled');
   ok('a cancelled meeting drops out of what is upcoming',
      !(await call(lead, '/api/meetings')).body.meetings?.some((m) => m.id === meeting.id));
+
+  // History is the point of keeping cancelled and finished calls at all.
+  const past = await call(lead, '/api/meetings?scope=past');
+  const kept = past.body.meetings?.find((m) => m.id === meeting.id);
+  ok('it is still there in the history', Boolean(kept));
+  ok('the history keeps the minutes', kept?.minutes === 'Agreed the Okta rollout order.');
+  ok('the history keeps who attended',
+     kept?.participants?.find((p) => p.id === dev.user.id)?.attended === 1);
   ok('a cancelled meeting cannot be retried',
      (await call(lead, `/api/meetings/${meeting.id}`,
        { method: 'PATCH', body: JSON.stringify({ action: 'retry' }) })).status === 400);

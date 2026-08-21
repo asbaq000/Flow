@@ -205,6 +205,16 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify({ action: 'retry' }),
       }),
+    saveMinutes: (id: string, minutes: string) =>
+      request<{ meeting: MeetingFull }>(`/api/meetings/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'minutes', minutes }),
+      }),
+    setAttendance: (id: string, userId: string, attended: boolean | null) =>
+      request<{ meeting: MeetingFull }>(`/api/meetings/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'attendance', userId, attended }),
+      }),
     cancel: (id: string) =>
       request<{ meeting: MeetingFull }>(`/api/meetings/${id}`, { method: 'DELETE' }),
   },

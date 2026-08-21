@@ -1,7 +1,7 @@
 import { many, one, run, tx, nextTaskSeq } from './pg';
 import { newId } from './ids';
 import type {
-  ActivityItem, Comment, Meeting, MeetingFull, MeetingStatus, Notification, Priority,
+  ActivityItem, Comment, Meeting, MeetingAttendee, MeetingFull, MeetingStatus, Notification, Priority,
   ProgressKind, ProgressUpdate, SheetEntry, Status, Tag, Task, TaskFull, TaskLink,
   TaskSheet, User, VoiceNote,
 } from './types';
@@ -888,13 +888,15 @@ export async function requestChanges(
 
 const MEETING_COLS = `id, title, agenda, organizer_id, task_id, starts_at, duration_min,
                       time_zone, join_url, calendar_event_id, status, sync_error,
+                      minutes, minutes_author_id, minutes_updated_at,
                       created_at, updated_at`;
 
 async function hydrateMeeting(row: Meeting): Promise<MeetingFull> {
   const [organizer, participants, task] = await Promise.all([
     getUser(row.organizer_id),
-    many<User>(
-      `SELECT u.id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at
+    many<MeetingAttendee>(
+      `SELECT u.id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at,
+              mp.attended
        FROM users u JOIN meeting_participants mp ON mp.user_id = u.id
        WHERE mp.meeting_id = ? ORDER BY u.name`,
       [row.id]
@@ -1063,6 +1065,51 @@ export async function retryMeetingSync(actor: User, id: string): Promise<Meeting
   );
 
   publish({ type: 'meeting.updated', taskId: meeting.task_id, actorId: actor.id });
+  return getMeeting(id);
+}
+
+/** Writes up what the call covered. */
+export async function setMeetingMinutes(
+  actor: User,
+  id: string,
+  minutes: string
+): Promise<MeetingFull | null> {
+  const meeting = await one<{ id: string; task_id: string | null }>(
+    'SELECT id, task_id FROM meetings WHERE id = ?',
+    [id]
+  );
+  if (!meeting) return null;
+
+  await run(
+    `UPDATE meetings SET minutes = ?, minutes_author_id = ?, minutes_updated_at = ?,
+                         updated_at = ? WHERE id = ?`,
+    [minutes.trim().slice(0, 20_000), actor.id, Date.now(), Date.now(), id]
+  );
+
+  publish({ type: 'meeting.updated', taskId: meeting.task_id, actorId: actor.id });
+  return getMeeting(id);
+}
+
+/** Records who actually turned up, which Google will not tell a free account. */
+export async function setMeetingAttendance(
+  actor: User,
+  id: string,
+  userId: string,
+  attended: boolean | null
+): Promise<MeetingFull | null> {
+  const row = await one<{ meeting_id: string }>(
+    'SELECT meeting_id FROM meeting_participants WHERE meeting_id = ? AND user_id = ?',
+    [id, userId]
+  );
+  if (!row) return null;
+
+  await run(
+    'UPDATE meeting_participants SET attended = ? WHERE meeting_id = ? AND user_id = ?',
+    [attended === null ? null : attended ? 1 : 0, id, userId]
+  );
+  await run('UPDATE meetings SET updated_at = ? WHERE id = ?', [Date.now(), id]);
+
+  publish({ type: 'meeting.updated', taskId: null, actorId: actor.id });
   return getMeeting(id);
 }
 

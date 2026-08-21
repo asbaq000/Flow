@@ -80,17 +80,47 @@ export interface Meeting {
   status: MeetingStatus;
   /** Why Google refused the event, shown to the organiser so they can retry. */
   sync_error: string | null;
+  /** What was discussed, written up in the app after the call. */
+  minutes: string;
+  minutes_author_id: string | null;
+  minutes_updated_at: number | null;
   created_at: number;
   updated_at: number;
 }
 
+/** A participant plus whether they actually turned up. */
+export interface MeetingAttendee extends User {
+  /** null = nobody has said, 1 = joined, 0 = did not. */
+  attended: number | null;
+}
+
 export interface MeetingFull extends Meeting {
   organizer: User | null;
-  participants: User[];
+  participants: MeetingAttendee[];
   task_title?: string | null;
 }
 
 export const MEETING_DURATIONS = [15, 30, 45, 60, 90, 120] as const;
+
+export type MeetingPhase = 'upcoming' | 'live' | 'ended' | 'cancelled';
+
+/**
+ * Where a meeting is in its life, worked out from the clock rather than
+ * stored. Google will not tell a free account when a call actually broke up,
+ * so the scheduled window is the honest source: no polling, no stale row, and
+ * it flips on its own the moment the end time passes.
+ */
+export function meetingPhase(
+  meeting: Pick<Meeting, 'status' | 'starts_at' | 'duration_min'>,
+  now: number = Date.now()
+): MeetingPhase {
+  if (meeting.status === 'cancelled') return 'cancelled';
+  const endsAt = meeting.starts_at + meeting.duration_min * 60_000;
+  if (now >= endsAt) return 'ended';
+  // Doors open a few minutes early, the way people actually join a call.
+  if (now >= meeting.starts_at - 5 * 60_000) return 'live';
+  return 'upcoming';
+}
 
 export interface Task {
   id: string;

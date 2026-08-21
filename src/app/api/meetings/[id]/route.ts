@@ -1,6 +1,8 @@
 import { currentUser } from '@/lib/auth';
 import { fail, ok, readJson } from '@/lib/api';
-import { cancelMeeting, getMeeting, retryMeetingSync } from '@/lib/store';
+import {
+  cancelMeeting, getMeeting, retryMeetingSync, setMeetingAttendance, setMeetingMinutes,
+} from '@/lib/store';
 import { canCancelMeeting, isLead } from '@/lib/permissions';
 import type { MeetingFull, User } from '@/lib/types';
 
@@ -28,10 +30,13 @@ export async function GET(_req: Request, { params }: Ctx) {
 }
 
 interface Body {
-  action?: 'retry';
+  action?: 'retry' | 'minutes' | 'attendance';
+  minutes?: string;
+  userId?: string;
+  /** true joined, false did not, null clears back to unrecorded. */
+  attended?: boolean | null;
 }
 
-/** Retries a meeting whose Google event never got created. */
 export async function PATCH(req: Request, { params }: Ctx) {
   const user = await currentUser();
   if (!user) return fail('Not signed in', 401);
@@ -44,6 +49,22 @@ export async function PATCH(req: Request, { params }: Ctx) {
   }
 
   const body = await readJson<Body>(req);
+
+  if (body.action === 'minutes') {
+    if (typeof body.minutes !== 'string') return fail('Write the minutes first');
+    const updated = await setMeetingMinutes(user, id, body.minutes);
+    if (!updated) return fail('Meeting not found', 404);
+    return ok({ meeting: updated });
+  }
+
+  if (body.action === 'attendance') {
+    if (!body.userId) return fail('Say who');
+    const attended = body.attended === null || body.attended === undefined ? null : Boolean(body.attended);
+    const updated = await setMeetingAttendance(user, id, body.userId, attended);
+    if (!updated) return fail('That person is not on this meeting', 404);
+    return ok({ meeting: updated });
+  }
+
   if (body.action !== 'retry') return fail('Unknown action');
   if (meeting.status === 'cancelled') return fail('This meeting was cancelled');
 

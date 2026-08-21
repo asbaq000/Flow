@@ -188,6 +188,11 @@ CREATE TABLE IF NOT EXISTS meetings (
   status            TEXT NOT NULL DEFAULT 'scheduled'
                       CHECK (status IN ('scheduled','failed','cancelled')),
   sync_error        TEXT,
+  -- What was actually discussed. Written in the app after the call, because
+  -- Meet only transcribes for paid Workspace accounts.
+  minutes           TEXT NOT NULL DEFAULT '',
+  minutes_author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  minutes_updated_at BIGINT,
   created_at        BIGINT NOT NULL,
   updated_at        BIGINT NOT NULL
 );
@@ -196,8 +201,17 @@ CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(starts_at);
 CREATE TABLE IF NOT EXISTS meeting_participants (
   meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- NULL until somebody says either way: "not marked" and "did not turn up"
+  -- are different things, and only one of them is worth showing in a history.
+  attended   INTEGER,
   PRIMARY KEY (meeting_id, user_id)
 );
+
+-- Upgrades a database created before meeting minutes existed.
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes TEXT NOT NULL DEFAULT '';
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes_author_id TEXT;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes_updated_at BIGINT;
+ALTER TABLE meeting_participants ADD COLUMN IF NOT EXISTS attended INTEGER;
 
 CREATE TABLE IF NOT EXISTS counters (
   name  TEXT PRIMARY KEY,
