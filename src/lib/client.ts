@@ -185,6 +185,12 @@ export const api = {
       request<{ tag: Tag }>('/api/tags', { method: 'POST', body: JSON.stringify({ name, color }) }),
   },
   transcripts: {
+    /** Sends one chunk of a recording to the hosted speech model. */
+    speech: (audio: string) =>
+      request<{ text: string; configured: boolean; error?: string }>(
+        '/api/transcripts/speech',
+        { method: 'POST', body: JSON.stringify({ audio }) }
+      ),
     /** Tidies raw speech-to-text, or turns a meeting transcript into minutes. */
     polish: (text: string, lang: 'ur' | 'en' | null, mode: 'clean' | 'minutes' = 'clean') =>
       request<{ text: string; lang: 'ur' | 'en' | null; polished: boolean }>(

@@ -14,6 +14,54 @@ export interface TranscribeResult {
   lang: 'ur' | 'en' | null;
 }
 
+/*
+ * A minute of audio per request. 16kHz mono PCM is about 2MB a minute, and
+ * base64 adds a third on top — which lands safely under the ~4.5MB body a
+ * serverless request will carry. Longer recordings go up a chunk at a time.
+ */
+const CHUNK_SECONDS = 60;
+
+/** Wraps raw PCM in a WAV header, the one audio container these models take. */
+function pcmToWav(pcm: Float32Array, sampleRate = SAMPLE_RATE): Uint8Array {
+  const bytes = new Uint8Array(44 + pcm.length * 2);
+  const view = new DataView(bytes.buffer);
+  const ascii = (offset: string | number, text?: string) => {
+    const [o, s] = typeof offset === 'number' ? [offset, text!] : [0, offset];
+    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+  };
+
+  ascii(0, 'RIFF');
+  view.setUint32(4, 36 + pcm.length * 2, true);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);            // PCM
+  view.setUint16(22, 1, true);            // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, 'data');
+  view.setUint32(40, pcm.length * 2, true);
+
+  for (let i = 0; i < pcm.length; i++) {
+    // Clamp before scaling: a sample slightly over 1.0 would wrap to silence.
+    const s = Math.max(-1, Math.min(1, pcm[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return bytes;
+}
+
+/** btoa on a whole recording blows the call stack, so feed it in slices. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const STEP = 0x8000;
+  for (let i = 0; i < bytes.length; i += STEP) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + STEP));
+  }
+  return btoa(binary);
+}
+
 /**
  * Decodes a recording into mono 16kHz PCM.
  *
@@ -87,6 +135,47 @@ export function spokenWords(raw: string): string {
   ).trim();
 }
 
+/**
+ * Sends the audio up a minute at a time and stitches the words back together.
+ *
+ * Returns null when the hosted model cannot do it — no key, no credit, or the
+ * service is down — which is the caller's signal to fall back to the model in
+ * the browser rather than leave somebody with no transcript at all.
+ */
+async function listenRemotely(
+  audio: Float32Array,
+  onProgress?: (percent: number) => void
+): Promise<string | null> {
+  const perChunk = CHUNK_SECONDS * SAMPLE_RATE;
+  const chunks = Math.max(1, Math.ceil(audio.length / perChunk));
+  const parts: string[] = [];
+
+  for (let i = 0; i < chunks; i++) {
+    const slice = audio.subarray(i * perChunk, Math.min((i + 1) * perChunk, audio.length));
+    // A sliver of trailing audio is silence, not speech worth a round trip.
+    if (slice.length < SAMPLE_RATE / 2) continue;
+
+    let res;
+    try {
+      res = await api.transcripts.speech(toBase64(pcmToWav(slice)));
+    } catch {
+      return null;
+    }
+
+    // Unconfigured or refused: hand the whole job to the local model rather
+    // than return half a transcript.
+    if (!res.configured || res.error) {
+      if (res.error) console.warn('[transcribe] hosted model refused:', res.error);
+      return null;
+    }
+
+    if (res.text.trim()) parts.push(res.text.trim());
+    onProgress?.(Math.round(((i + 1) / chunks) * 100));
+  }
+
+  return parts.join(' ').trim();
+}
+
 export function useTranscriber(onProgress?: (percent: number) => void) {
   // One in-flight request at a time per hook instance; the API-level "claim"
   // handles cross-tab/cross-visitor duplication.
@@ -100,6 +189,20 @@ export function useTranscriber(onProgress?: (percent: number) => void) {
 
     try {
       const audio = await decodeToMono16k(blob);
+
+      /*
+       * The hosted speech model first. It hears Urdu properly, handles a
+       * sentence that switches language halfway, and costs a visitor nothing
+       * to download. Whisper stays behind it for installs with no API key,
+       * and for the times the service will not answer.
+       */
+      const heard = await listenRemotely(audio, progressRef.current);
+      if (heard !== null) {
+        const speech = spokenWords(heard);
+        if (!speech) return { text: '', lang: null };
+        return { text: speech, lang: hasArabicScript(speech) ? 'ur' : 'en' };
+      }
+
       const worker = getWorker();
       const id = Math.random().toString(36).slice(2);
 

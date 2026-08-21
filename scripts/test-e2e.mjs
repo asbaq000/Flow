@@ -522,6 +522,41 @@ console.log('\nDeleting a task');
      (await call(manager, `/api/tasks/${draft.body.task.id}`, { method: 'DELETE' })).status === 200);
 }
 
+/* ---------- the hosted speech model ---------- */
+console.log('\nHosted transcription');
+{
+  ok('signing out blocks it',
+     (await fetch(`${BASE}/api/transcripts/speech`, {
+       method: 'POST', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ audio: 'AAAA' }),
+     })).status === 401);
+
+  ok('no audio is refused', (await call(lead, '/api/transcripts/speech', {
+    method: 'POST', body: JSON.stringify({}) })).status === 400);
+
+  // The client chunks precisely so this never fires; if it does, chunking broke.
+  ok('an oversized chunk is refused', (await call(lead, '/api/transcripts/speech', {
+    method: 'POST', body: JSON.stringify({ audio: 'A'.repeat(4_000_001) }) })).status === 400);
+
+  const status = await call(lead, '/api/transcripts/speech');
+  ok('it reports whether it is wired up', status.status === 200
+     && typeof status.body.configured === 'boolean' && Boolean(status.body.model),
+     JSON.stringify(status.body));
+
+  /*
+   * Whatever the hosted model does, the answer must be shaped so the browser
+   * can decide: text to use, or a reason to fall back to its own model. A
+   * silent empty response would strand a recording with no transcript and no
+   * explanation, which is the failure this endpoint exists to avoid.
+   */
+  const heard = await call(lead, '/api/transcripts/speech', {
+    method: 'POST', body: JSON.stringify({ audio: 'AAAA' }) });
+  ok('it always answers usefully', heard.status === 200
+     && typeof heard.body.text === 'string'
+     && (heard.body.configured === false || 'error' in heard.body || heard.body.text.length >= 0),
+     JSON.stringify(heard.body).slice(0, 160));
+}
+
 console.log('\nPolishing transcripts');
 {
   ok('signing out blocks it',

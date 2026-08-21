@@ -184,3 +184,92 @@ Rules:
 export async function writeMinutes(transcript: string): Promise<string | null> {
   return ask(MINUTES_SYSTEM, `<<<TRANSCRIPT\n${transcript}\nTRANSCRIPT>>>`, 1200);
 }
+
+/* ------------------------------------------------------------------ */
+/* Listening                                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Gemini Flash hears the audio itself, which is a different job from the
+ * Llama model above and needs a model that accepts sound. It is markedly
+ * better than browser Whisper on Urdu and on code-switching mid-sentence,
+ * costs a small fraction of a cent a minute, and spares every visitor a
+ * couple of hundred megabytes of model download.
+ *
+ * OpenRouter requires a positive balance before it will accept audio at all,
+ * so an account with no credit gets a clear refusal rather than a transcript.
+ */
+const SPEECH_MODEL = process.env.OPENROUTER_SPEECH_MODEL || 'google/gemini-2.5-flash';
+
+export const speechModel = SPEECH_MODEL;
+
+const LISTEN_PROMPT = `Transcribe this recording exactly as it was spoken.
+
+- Write only the words spoken. No commentary, no timestamps, no speaker
+  labels unless the speakers introduce themselves.
+- Urdu is written in Roman letters the way Pakistanis actually type it —
+  "kal subah meeting hai". Never translate Urdu into English, and never write
+  it in Arabic script.
+- English stays English.
+- Urdu and English mixed in one sentence is normal; keep both as spoken.
+- Punctuate naturally.
+- If nothing intelligible was said, reply with exactly: (nothing)`;
+
+export interface SpeechResult {
+  text: string;
+  /** Why it could not be done, for showing to whoever pressed the button. */
+  error?: string;
+}
+
+/**
+ * Turns recorded audio into text.
+ *
+ * `audioBase64` must be a WAV — the browser decodes whatever the recorder
+ * produced and re-encodes it, because Opus in a WebM container is not
+ * something these models accept.
+ */
+export async function transcribeAudio(audioBase64: string): Promise<SpeechResult> {
+  if (!openRouterEnabled) return { text: '', error: 'not-configured' };
+
+  try {
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+        'X-Title': 'Flow',
+      },
+      body: JSON.stringify({
+        model: SPEECH_MODEL,
+        temperature: 0,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: LISTEN_PROMPT },
+            { type: 'input_audio', input_audio: { data: audioBase64, format: 'wav' } },
+          ],
+        }],
+      }),
+    });
+
+    const body = (await res.json().catch(() => ({}))) as {
+      choices?: { message?: { content?: string } }[];
+      error?: { message?: string };
+    };
+
+    if (!res.ok) {
+      const message = body.error?.message ?? `HTTP ${res.status}`;
+      console.warn('[openrouter] would not listen:', message);
+      return { text: '', error: message };
+    }
+
+    const text = (body.choices?.[0]?.message?.content ?? '').trim();
+    // The prompt's own way of saying it heard nothing worth writing down.
+    return { text: text === '(nothing)' ? '' : text };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'the request failed';
+    console.warn('[openrouter] listening failed:', message);
+    return { text: '', error: message };
+  }
+}
