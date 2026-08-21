@@ -9,6 +9,7 @@ import { meetingPhase } from '@/lib/types';
 import { api } from '@/lib/client';
 import { canCancelMeeting } from '@/lib/permissions';
 import { Avatar } from '../ui';
+import MeetingRecorder from '../MeetingRecorder';
 import { formatDateTime, timeAgo } from './shared';
 
 export default function MeetingsView({
@@ -171,8 +172,17 @@ function MeetingCard({
 
       <Attendance meeting={meeting} phase={phase} mayManage={mayManage} onChanged={onChanged} />
 
+      {/*
+       * Offered while the call is running and afterwards: people usually
+       * remember to hit record once it is already under way, and a recording
+       * made on the phone can still be written up later.
+       */}
+      {mayManage && (phase === 'live' || phase === 'ended') && (
+        <MeetingRecorder meeting={meeting} onSaved={onChanged} />
+      )}
+
       {/* Minutes only make sense once there is something to write up. */}
-      {(phase === 'ended' || meeting.minutes) && (
+      {(phase === 'ended' || phase === 'live' || meeting.minutes) && (
         <Minutes
           meeting={meeting}
           mayManage={mayManage}
