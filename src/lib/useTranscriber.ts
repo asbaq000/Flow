@@ -66,6 +66,27 @@ function getWorker(): Worker {
  * download on a visitor's first transcription (cached after) and running on
  * whatever CPU the visitor's device has.
  */
+/** Letters and digits in any script, so Urdu counts as readily as English. */
+const WORD_CHAR = /[\p{L}\p{N}]/gu;
+
+/**
+ * Whatever the model heard, or empty when it did not really hear anything.
+ *
+ * Fed silence or noise, Whisper does not return nothing — it returns filler
+ * like ",,,,, ,,, ," or a lone "you", because it is built to always emit
+ * something. Saving that as a transcript is worse than saving none: it looks
+ * like the feature ran and produced gibberish. Anything without at least a
+ * couple of real characters is treated as "nothing was said".
+ */
+export function spokenWords(raw: string): string {
+  const text = raw.trim();
+  if ((text.match(WORD_CHAR) ?? []).length < 2) return '';
+  // Trim the punctuation runs Whisper tacks on around real speech.
+  return text.replace(/^[\s\p{P}]+/u, '').replace(/[\s\p{P}]+$/u, (tail) =>
+    /[.!?…]/.test(tail) ? tail.trimEnd() : ''
+  ).trim();
+}
+
 export function useTranscriber(onProgress?: (percent: number) => void) {
   // One in-flight request at a time per hook instance; the API-level "claim"
   // handles cross-tab/cross-visitor duplication.
@@ -103,12 +124,13 @@ export function useTranscriber(onProgress?: (percent: number) => void) {
         worker.postMessage({ type: 'transcribe', id, audio }, [audio.buffer]);
       });
 
-      if (!rawText) return { text: '', lang: null };
+      const speech = spokenWords(rawText);
+      if (!speech) return { text: '', lang: null };
 
-      if (hasArabicScript(rawText)) {
-        return { text: urduToRoman(rawText), lang: 'ur' };
+      if (hasArabicScript(speech)) {
+        return { text: urduToRoman(speech), lang: 'ur' };
       }
-      return { text: rawText, lang: 'en' };
+      return { text: speech, lang: 'en' };
     } finally {
       busy.current = false;
     }

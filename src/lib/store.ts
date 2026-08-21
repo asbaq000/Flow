@@ -709,9 +709,16 @@ export async function deleteVoiceNote(id: string) {
  * actually match a row" check — no separate rowcount plumbing needed.
  */
 export async function claimVoiceTranscription(id: string): Promise<boolean> {
+  /*
+   * 'done' is claimable too, so a poor transcript can be run again — the
+   * model is not deterministic and a second pass often does better. Only
+   * 'pending' is refused, which is what stops two tabs transcribing the
+   * same recording at once. The old text is left in place until a new one
+   * replaces it, so a failed retry does not lose what was already there.
+   */
   const row = await one<{ id: string }>(
     `UPDATE voice_notes SET transcript_status = 'pending'
-     WHERE id = ? AND transcript_status IN ('none', 'failed')
+     WHERE id = ? AND transcript_status <> 'pending'
      RETURNING id`,
     [id]
   );
@@ -728,7 +735,17 @@ export async function setVoiceTranscript(
       ['done', patch.transcript.slice(0, 8000), patch.lang, id]
     );
   } else {
-    await run('UPDATE voice_notes SET transcript_status = ? WHERE id = ?', [patch.status, id]);
+    /*
+     * A retry that goes wrong must not bury a transcript that already exists:
+     * a note holding text stays 'done' and keeps showing it, rather than
+     * flipping to an error and hiding the only copy anyone had.
+     */
+    await run(
+      `UPDATE voice_notes
+       SET transcript_status = CASE WHEN transcript IS NULL OR transcript = '' THEN ? ELSE 'done' END
+       WHERE id = ?`,
+      [patch.status, id]
+    );
   }
 
   const note = await getVoiceNote(id);

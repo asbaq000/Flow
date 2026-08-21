@@ -348,7 +348,7 @@ function TranscriptRow({
 }) {
   if (note.transcript_status === 'done' && note.transcript) {
     return (
-      <p className="mt-1.5 flex items-start gap-1.5 border-t pt-1.5 text-[12px] leading-snug text-[var(--text-secondary)]">
+      <div className="group/tr mt-1.5 flex items-start gap-1.5 border-t pt-1.5 text-[12px] leading-snug text-[var(--text-secondary)]">
         <Captions size={12} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
         <span className="min-w-0 flex-1">
           {note.transcript}
@@ -362,7 +362,18 @@ function TranscriptRow({
             </span>
           )}
         </span>
-      </p>
+        {/* Speech-to-text is a guess, and a second pass often guesses better. */}
+        {transcriptionSupported() && (
+          <button
+            onClick={onRetry}
+            disabled={busy}
+            title="Transcribe this again"
+            className="shrink-0 rounded p-0.5 text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-hover)] hover:text-[var(--text)] focus:opacity-100 group-hover/tr:opacity-100"
+          >
+            {busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          </button>
+        )}
+      </div>
     );
   }
 

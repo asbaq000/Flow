@@ -448,10 +448,31 @@ console.log('\nVoice transcription (transcribing itself runs in the browser; thi
   ok('an empty transcript is rejected', (await call(lead, `/api/voice/${noteId}`, {
     method: 'PATCH', body: JSON.stringify({ status: 'done', transcript: '   ' }) })).status === 400);
 
-  ok('once done, someone else can still re-claim to retry',
+  // Whisper answers silence with filler rather than nothing, and that filler
+  // must never end up stored as if it were speech.
+  ok('a transcript of only punctuation is rejected', (await call(lead, `/api/voice/${noteId}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'done', transcript: ',,,,,,,,,, ,,, , ,,,' }) })).status === 400);
+  ok('a transcript of only dots and dashes is rejected', (await call(lead, `/api/voice/${noteId}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'done', transcript: '. - . - .' }) })).status === 400);
+  ok('real speech is still accepted', (await call(lead, `/api/voice/${noteId}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'done', transcript: 'ap kese hain' }) })).status === 200);
+
+  ok('a poor transcript can be run again',
      (await call(dev, `/api/voice/${noteId}`, {
-       method: 'PATCH', body: JSON.stringify({ action: 'claim' }) })).body.claimed === false,
-     'claim should stay refused while status is done, not failed/none');
+       method: 'PATCH', body: JSON.stringify({ action: 'claim' }) })).body.claimed === true,
+     'a done note must be re-claimable, otherwise a bad transcript is permanent');
+  ok('but not while one is already running',
+     (await call(lead, `/api/voice/${noteId}`, {
+       method: 'PATCH', body: JSON.stringify({ action: 'claim' }) })).body.claimed === false);
+
+  // Mid-retry the note is 'pending' with the old text still on it.
+  const failedRetry = await call(dev, `/api/voice/${noteId}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'failed' }) });
+  ok('a failed retry keeps the transcript it already had',
+     failedRetry.body.voiceNote?.transcript === 'ap kese hain');
+  ok('and stays readable rather than flipping to an error',
+     failedRetry.body.voiceNote?.transcript_status === 'done',
+     failedRetry.body.voiceNote?.transcript_status);
 
   const brief3 = await postVoice(manager, task.id);
   const failId = brief3.body.voiceNote.id;

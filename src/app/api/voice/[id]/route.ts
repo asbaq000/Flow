@@ -83,6 +83,14 @@ export async function PATCH(req: Request, { params }: Ctx) {
 
   if (body.status === 'done') {
     if (!body.transcript || !body.transcript.trim()) return fail('Transcript text is empty');
+    /*
+     * Fed silence, Whisper answers with filler like ",,,, ,," rather than
+     * nothing. The client screens that out, but a stored transcript is what
+     * people end up reading, so refuse it here as well.
+     */
+    if ((body.transcript.match(/[\p{L}\p{N}]/gu) ?? []).length < 2) {
+      return fail('That transcript has no words in it');
+    }
     const updated = await setVoiceTranscript(id, {
       status: 'done',
       transcript: body.transcript.trim(),
