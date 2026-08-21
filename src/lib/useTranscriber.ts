@@ -127,9 +127,24 @@ export function useTranscriber(onProgress?: (percent: number) => void) {
       const speech = spokenWords(rawText);
       if (!speech) return { text: '', lang: null };
 
-      if (hasArabicScript(speech)) {
-        return { text: urduToRoman(speech), lang: 'ur' };
+      const isUrdu = hasArabicScript(speech);
+
+      /*
+       * Hand the raw hearing to the language model, which punctuates it,
+       * repairs mis-heard words and writes Urdu as people actually type it.
+       * When it is unavailable the local result stands: the rule-based
+       * transliteration for Urdu, the raw text for English.
+       */
+      try {
+        const polished = await api.transcripts.polish(speech, isUrdu ? 'ur' : 'en');
+        if (polished.polished && polished.text.trim()) {
+          return { text: polished.text.trim(), lang: isUrdu ? 'ur' : 'en' };
+        }
+      } catch {
+        // Falls through to the local result below.
       }
+
+      if (isUrdu) return { text: urduToRoman(speech), lang: 'ur' };
       return { text: speech, lang: 'en' };
     } finally {
       busy.current = false;

@@ -489,6 +489,37 @@ console.log('\nVoice transcription (transcribing itself runs in the browser; thi
      JSON.stringify(noteInTask).slice(0, 150));
 }
 
+/* ---------- polishing transcripts ---------- */
+console.log('\nPolishing transcripts');
+{
+  ok('signing out blocks it',
+     (await fetch(`${BASE}/api/transcripts/polish`, {
+       method: 'POST', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ text: 'hello' }),
+     })).status === 401);
+
+  ok('empty text is refused', (await call(lead, '/api/transcripts/polish', {
+    method: 'POST', body: JSON.stringify({ text: '   ' }) })).status === 400);
+
+  ok('an enormous transcript is refused', (await call(lead, '/api/transcripts/polish', {
+    method: 'POST', body: JSON.stringify({ text: 'x'.repeat(60_001) }) })).status === 400);
+
+  /*
+   * The model is optional, so this asserts the contract that holds either
+   * way: a caller always gets usable text back. Unconfigured it is the text
+   * that went in, which is what keeps a transcript from being lost when the
+   * key is missing, rate-limited or down.
+   */
+  const spoken = 'kal subah team meeting hai';
+  const polished = await call(lead, '/api/transcripts/polish', {
+    method: 'POST', body: JSON.stringify({ text: spoken, lang: 'ur', mode: 'clean' }) });
+  ok('it always answers with usable text', polished.status === 200 && Boolean(polished.body.text),
+     JSON.stringify(polished.body).slice(0, 120));
+  ok('nothing is lost when the model is unavailable',
+     polished.body.polished === true || polished.body.text === spoken,
+     `polished=${polished.body.polished} text=${polished.body.text}`);
+}
+
 console.log('\nDeveloper task sheet');
 // The task was already approved above, so it is genuinely DONE by now.
 const sheet = (await call(lead, `/api/users/${dev.user.id}/sheet`)).body.sheet;

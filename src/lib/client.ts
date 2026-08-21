@@ -184,6 +184,14 @@ export const api = {
     create: (name: string, color: string) =>
       request<{ tag: Tag }>('/api/tags', { method: 'POST', body: JSON.stringify({ name, color }) }),
   },
+  transcripts: {
+    /** Tidies raw speech-to-text, or turns a meeting transcript into minutes. */
+    polish: (text: string, lang: 'ur' | 'en' | null, mode: 'clean' | 'minutes' = 'clean') =>
+      request<{ text: string; lang: 'ur' | 'en' | null; polished: boolean }>(
+        '/api/transcripts/polish',
+        { method: 'POST', body: JSON.stringify({ text, lang, mode }) }
+      ),
+  },
   meetings: {
     list: (scope: 'upcoming' | 'past' = 'upcoming') =>
       request<{ meetings: MeetingFull[] }>(`/api/meetings?scope=${scope}`),

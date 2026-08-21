@@ -10,6 +10,7 @@ type Stage =
   | { kind: 'idle' }
   | { kind: 'recording'; seconds: number }
   | { kind: 'transcribing'; percent: number }
+  | { kind: 'summarising' }
   | { kind: 'saving' };
 
 /**
@@ -138,17 +139,32 @@ export default function MeetingRecorder({
 
     setStage({ kind: 'transcribing', percent: 0 });
     try {
-      const { text } = await transcribe(blob);
+      const { text, lang } = await transcribe(blob);
       if (!text.trim()) {
         setStage({ kind: 'idle' });
         setError('Nothing could be made out in that recording.');
         return;
       }
 
+      setStage({ kind: 'summarising' });
+
+      /*
+       * A transcript is a wall of speech; minutes are what somebody actually
+       * reads afterwards. If the model is unavailable the transcript itself
+       * is saved, which is still the record of the call.
+       */
+      let written = text.trim();
+      try {
+        const minutes = await api.transcripts.polish(written, lang, 'minutes');
+        if (minutes.polished && minutes.text.trim()) written = minutes.text.trim();
+      } catch {
+        // Keep the transcript.
+      }
+
       setStage({ kind: 'saving' });
       // Never overwrite minutes somebody already wrote.
       const existing = meeting.minutes.trim();
-      const next = existing ? `${existing}\n\n---\n\n${text.trim()}` : text.trim();
+      const next = existing ? `${existing}\n\n---\n\n${written}` : written;
       await api.meetings.saveMinutes(meeting.id, next);
       onSaved();
       setStage({ kind: 'idle' });
@@ -210,6 +226,12 @@ export default function MeetingRecorder({
           <p className="mt-1 text-[11px] text-[var(--text-tertiary)]">
             This runs on your machine, so a long call takes a while. Leave the tab open.
           </p>
+        </div>
+      )}
+
+      {stage.kind === 'summarising' && (
+        <div className="flex items-center gap-2 text-[12.5px]">
+          <Loader2 size={13} className="animate-spin" /> Turning it into minutes…
         </div>
       )}
 
