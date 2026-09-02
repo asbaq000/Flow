@@ -122,6 +122,20 @@ export function meetingPhase(
   return 'upcoming';
 }
 
+export interface Attachment {
+  id: string;
+  task_id: string;
+  uploader_id: string | null;
+  filename: string;
+  mime: string;
+  byte_size: number;
+  created_at: number;
+  uploader?: User | null;
+}
+
+/** Per file. The whole database is 500 MB on Supabase's free tier. */
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
 export interface Task {
   id: string;
   seq: number;
@@ -154,6 +168,7 @@ export interface TaskFull extends Task {
   subtasks: TaskFull[];
   comment_count: number;
   voice_notes: VoiceNote[];
+  attachments: Attachment[];
   progress_updates: ProgressUpdate[];
   parent_title?: string | null;
 }

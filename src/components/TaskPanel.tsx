@@ -17,6 +17,7 @@ import BlockEditor from './BlockEditor';
 import CommentThread from './CommentThread';
 import ProgressPanel from './ProgressPanel';
 import { VoiceNoteList, VoiceRecorder } from './VoiceNotes';
+import Attachments from './Attachments';
 import { autoTranscribe, useTranscriber, withTranscriptAppended } from '@/lib/useTranscriber';
 import { formatDateTime, fromDateInput, timeAgo, toDateInput } from './views/shared';
 
@@ -133,7 +134,8 @@ export default function TaskPanel({
         if (event.taskId && event.taskId !== taskId) return;
         if (event.type === 'comment.added' || event.type === 'comment.removed' ||
             event.type === 'progress.added' || event.type === 'voice.added' ||
-            event.type === 'voice.removed' || event.type === 'voice.transcribed') {
+            event.type === 'voice.removed' || event.type === 'voice.transcribed' ||
+            event.type === 'attachment.added' || event.type === 'attachment.removed') {
           refreshCollab();
         }
         if (event.type === 'task.updated' || event.type === 'progress.added' ||
@@ -142,7 +144,9 @@ export default function TaskPanel({
             // would leave a note added or transcribed by someone else stuck
             // on stale data.
             event.type === 'voice.added' || event.type === 'voice.removed' ||
-            event.type === 'voice.transcribed') {
+            event.type === 'voice.transcribed' ||
+            // Same reasoning for files: they only arrive with the full task.
+            event.type === 'attachment.added' || event.type === 'attachment.removed') {
           refreshTaskMeta();
         }
       },
@@ -606,6 +610,9 @@ export default function TaskPanel({
                     <LinksTab
                       task={task}
                       editable={canEdit}
+                      me={me}
+                      canAttach={Boolean(abilities?.attach)}
+                      onReload={() => { void load(); }}
                       onAdd={async (url, label) => {
                         try {
                           await api.tasks.addLink(task.id, url, label);
@@ -772,12 +779,15 @@ function TagEditor({
 }
 
 function LinksTab({
-  task, editable, onAdd, onRemove,
+  task, editable, me, canAttach, onAdd, onRemove, onReload,
 }: {
   task: TaskFull;
   editable: boolean;
+  me: User;
+  canAttach: boolean;
   onAdd: (url: string, label: string) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
+  onReload: () => void;
 }) {
   const [url, setUrl] = useState('');
   const [label, setLabel] = useState('');
@@ -855,6 +865,20 @@ function LinksTab({
       ) : (
         !task.links.length && <p className="text-[13px] text-[var(--text-tertiary)]">No links attached.</p>
       )}
+
+      <div className="mt-5 border-t pt-4">
+        <h3 className="mb-1 text-[13px] font-semibold">Files</h3>
+        <p className="mb-2.5 text-[12.5px] text-[var(--text-secondary)]">
+          Documents that belong with this task — a spec, a screenshot, an export that came out wrong.
+        </p>
+        <Attachments
+          taskId={task.id}
+          files={task.attachments}
+          me={me}
+          canAdd={canAttach}
+          onChanged={onReload}
+        />
+      </div>
     </div>
   );
 }

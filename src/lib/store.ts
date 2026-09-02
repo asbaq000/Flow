@@ -1,7 +1,8 @@
 import { many, one, run, tx, nextTaskSeq } from './pg';
 import { newId } from './ids';
 import type {
-  ActivityItem, Comment, Meeting, MeetingAttendee, MeetingFull, MeetingStatus, Notification, Priority,
+  ActivityItem, Attachment, Comment, Meeting, MeetingAttendee, MeetingFull, MeetingStatus,
+  Notification, Priority,
   ProgressKind, ProgressUpdate, SheetEntry, Status, Tag, Task, TaskFull, TaskLink,
   TaskSheet, User, VoiceNote,
 } from './types';
@@ -87,7 +88,8 @@ async function hydrateAll(tasks: Task[], depth = 1): Promise<TaskFull[]> {
   const parentIds = [...new Set(tasks.map((t) => t.parent_id).filter(Boolean))] as string[];
 
   const [
-    tagRows, linkRows, collabRows, commentCounts, voiceRows, progressRows, subtaskRows, parentRows, users,
+    tagRows, linkRows, collabRows, commentCounts, voiceRows, attachmentRows, progressRows,
+    subtaskRows, parentRows, users,
   ] = await Promise.all([
     many<Tag & { task_id: string }>(
       `SELECT t.*, tt.task_id FROM tags t JOIN task_tags tt ON tt.tag_id = t.id
@@ -107,6 +109,10 @@ async function hydrateAll(tasks: Task[], depth = 1): Promise<TaskFull[]> {
     many<VoiceNote>(
       `SELECT ${VOICE_COLS} FROM voice_notes
        WHERE task_id = ANY(?) AND comment_id IS NULL ORDER BY created_at`,
+      [ids]
+    ),
+    many<Attachment>(
+      `SELECT ${ATTACHMENT_COLS} FROM attachments WHERE task_id = ANY(?) ORDER BY created_at`,
       [ids]
     ),
     many<ProgressUpdate>(
@@ -131,6 +137,7 @@ async function hydrateAll(tasks: Task[], depth = 1): Promise<TaskFull[]> {
   const linksBy = groupBy(linkRows, (r) => r.task_id);
   const collabBy = groupBy(collabRows, (r) => r.task_id);
   const voiceBy = groupBy(voiceRows, (r) => r.task_id);
+  const attachBy = groupBy(attachmentRows, (r) => r.task_id);
   const progressBy = groupBy(progressRows, (r) => r.task_id);
   const subtasksBy = groupBy(subtasks, (s) => s.parent_id!);
   const countBy = new Map(commentCounts.map((r) => [r.task_id, r.c]));
@@ -151,6 +158,10 @@ async function hydrateAll(tasks: Task[], depth = 1): Promise<TaskFull[]> {
     subtasks: subtasksBy.get(task.id) ?? [],
     comment_count: countBy.get(task.id) ?? 0,
     voice_notes: withAuthor(voiceBy.get(task.id) ?? []),
+    attachments: (attachBy.get(task.id) ?? []).map((a) => ({
+      ...a,
+      uploader: users.get(a.uploader_id ?? '') ?? null,
+    })),
     progress_updates: withAuthor(progressBy.get(task.id) ?? []),
     parent_title: task.parent_id ? parentTitles.get(task.parent_id) ?? null : null,
   }));
@@ -897,6 +908,60 @@ export async function requestChanges(
   }
 
   return getTask(taskId);
+}
+
+/* ------------------------------------------------------------------ */
+/* Attachments                                                         */
+/* ------------------------------------------------------------------ */
+
+/** Everything but the bytes — those are only ever read one file at a time. */
+const ATTACHMENT_COLS =
+  'id, task_id, uploader_id, filename, mime, byte_size, created_at';
+
+export async function getAttachment(id: string): Promise<Attachment | null> {
+  const row = await one<Attachment>(
+    `SELECT ${ATTACHMENT_COLS} FROM attachments WHERE id = ?`,
+    [id]
+  );
+  if (!row) return null;
+  return { ...row, uploader: await getUser(row.uploader_id) };
+}
+
+/** The file itself, fetched separately so listing a task never loads bytes. */
+export async function getAttachmentData(
+  id: string
+): Promise<{ data: Buffer; mime: string; filename: string } | null> {
+  return one<{ data: Buffer; mime: string; filename: string }>(
+    'SELECT data, mime, filename FROM attachments WHERE id = ?',
+    [id]
+  );
+}
+
+export async function addAttachment(input: {
+  taskId: string;
+  uploaderId: string;
+  filename: string;
+  mime: string;
+  data: Buffer;
+}): Promise<Attachment> {
+  const id = newId('f_');
+  await run(
+    `INSERT INTO attachments (id, task_id, uploader_id, filename, mime, byte_size, data, created_at)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [
+      id, input.taskId, input.uploaderId, input.filename, input.mime,
+      input.data.byteLength, input.data, Date.now(),
+    ]
+  );
+  await logActivity(input.taskId, input.uploaderId, 'attached', { filename: input.filename });
+  publish({ type: 'attachment.added', taskId: input.taskId, actorId: input.uploaderId });
+  return (await getAttachment(id))!;
+}
+
+export async function deleteAttachment(id: string) {
+  const row = await one<{ task_id: string }>('SELECT task_id FROM attachments WHERE id = ?', [id]);
+  await run('DELETE FROM attachments WHERE id = ?', [id]);
+  publish({ type: 'attachment.removed', taskId: row?.task_id ?? null });
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,7 +1,8 @@
 'use client';
 
 import type {
-  Block, Comment, MeetingFull, Notification, Priority, ProgressUpdate, Status, Tag, TaskFull,
+  Attachment, Block, Comment, MeetingFull, Notification, Priority, ProgressUpdate, Status, Tag,
+  TaskFull,
   TaskSheet, User, VoiceNote,
 } from './types';
 
@@ -183,6 +184,21 @@ export const api = {
   tags: {
     create: (name: string, color: string) =>
       request<{ tag: Tag }>('/api/tags', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  },
+  attachments: {
+    upload: async (taskId: string, file: File) => {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      form.append('filename', file.name);
+      // No Content-Type header — the browser sets the multipart boundary.
+      const res = await fetch(`/api/tasks/${taskId}/attachments`, { method: 'POST', body: form });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!res.ok) throw new ApiError(data.error ?? `Upload failed (${res.status})`, res.status);
+      return data as { attachment: Attachment };
+    },
+    remove: (id: string) => request<{ ok: true }>(`/api/attachments/${id}`, { method: 'DELETE' }),
+    downloadUrl: (id: string) => `/api/attachments/${id}`,
   },
   transcripts: {
     /** Sends one chunk of a recording to the hosted speech model. */

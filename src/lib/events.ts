@@ -18,6 +18,8 @@ export type FlowEventType =
   | 'voice.added'
   | 'voice.removed'
   | 'voice.transcribed'
+  | 'attachment.added'
+  | 'attachment.removed'
   | 'meeting.created'
   | 'meeting.updated'
   | 'notification';

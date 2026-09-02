@@ -154,6 +154,24 @@ export function canAddCommentVoiceNote(user: User, task: TaskFull): boolean {
   return canComment(user, task);
 }
 
+/**
+ * Anyone on the task can attach a file. Unlike the brief, which is the
+ * requester's statement of what they want, a document is usually evidence —
+ * a screenshot of the bug, the spec, the export that came out wrong — and
+ * the developer working on it is exactly who tends to have it.
+ */
+export function canAddAttachment(user: User, task: TaskFull): boolean {
+  return canView(user, task);
+}
+
+/** Whoever put it there can take it away, as can a Lead. */
+export function canRemoveAttachment(
+  user: User,
+  attachment: { uploader_id: string | null }
+): boolean {
+  return isLead(user) || attachment.uploader_id === user.id;
+}
+
 export function canArchive(user: User, task: TaskFull): boolean {
   return isLead(user) || (task.creator_id === user.id && task.status === 'TRIAGE');
 }
@@ -219,6 +237,7 @@ export interface TaskAbilities {
   priority: boolean;
   archive: boolean;
   delete: boolean;
+  attach: boolean;
   voiceOnTask: boolean;
   voiceOnComment: boolean;
   postProgress: boolean;
@@ -239,6 +258,7 @@ export function abilitiesFor(user: User, task: TaskFull): TaskAbilities {
     priority: canEditPriority(user, task),
     archive: canArchive(user, task),
     delete: canDelete(user, task),
+    attach: canAddAttachment(user, task),
     voiceOnTask: canAddTaskVoiceNote(user, task),
     voiceOnComment: canAddCommentVoiceNote(user, task),
     postProgress: canPostProgress(user, task),

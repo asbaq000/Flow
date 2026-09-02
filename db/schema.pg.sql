@@ -151,6 +151,21 @@ ALTER TABLE voice_notes ADD COLUMN IF NOT EXISTS transcript TEXT;
 ALTER TABLE voice_notes ADD COLUMN IF NOT EXISTS transcript_lang TEXT;
 ALTER TABLE voice_notes ADD COLUMN IF NOT EXISTS transcript_status TEXT NOT NULL DEFAULT 'none';
 
+-- Files attached to a task. Like the voice notes above, the bytes live in the
+-- database: Supabase's free tier is 500 MB shared with everything else, hence
+-- the small per-file cap enforced in the upload route.
+CREATE TABLE IF NOT EXISTS attachments (
+  id          TEXT PRIMARY KEY,
+  task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  uploader_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  filename    TEXT NOT NULL,
+  mime        TEXT NOT NULL DEFAULT 'application/octet-stream',
+  byte_size   INTEGER NOT NULL DEFAULT 0,
+  data        BYTEA NOT NULL,
+  created_at  BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id);
+
 CREATE TABLE IF NOT EXISTS progress_updates (
   id           TEXT PRIMARY KEY,
   task_id      TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

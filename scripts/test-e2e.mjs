@@ -491,6 +491,98 @@ console.log('\nVoice transcription (transcribing itself runs in the browser; thi
 
 /* ---------- polishing transcripts ---------- */
 /* ---------- who may delete a task ---------- */
+/* ---------- files on a task ---------- */
+console.log('\nAttaching files');
+{
+  const upload = async (sess, taskId, name, body, type = 'text/plain') => {
+    const form = new FormData();
+    form.append('file', new Blob([body], { type }), name);
+    const res = await fetch(`${BASE}/api/tasks/${taskId}/attachments`, {
+      method: 'POST', headers: { Cookie: sess.cookie }, body: form,
+    });
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : {} };
+  };
+
+  const up = await upload(lead, task.id, 'spec.txt', 'the login page must accept SSO');
+  ok('a file can be attached', up.status === 201, JSON.stringify(up.body).slice(0, 120));
+  const fileId = up.body.attachment?.id;
+  ok('it records who uploaded it', up.body.attachment?.uploader_id === lead.user.id);
+  ok('it records the size', up.body.attachment?.byte_size === 30, String(up.body.attachment?.byte_size));
+
+  ok('it comes back with the task',
+     (await call(lead, `/api/tasks/${task.id}`)).body.task.attachments
+       ?.some((a) => a.id === fileId));
+
+  ok('an empty file is refused',
+     (await upload(lead, task.id, 'empty.txt', '')).status === 400);
+
+  // The assigned developer is exactly who tends to have the screenshot.
+  const byDev = await upload(dev, task.id, 'screenshot.txt', 'stack trace here');
+  ok('the developer on the task can attach one too', byDev.status === 201, String(byDev.status));
+
+  // manager2 raised nothing here and was assigned nothing — otherDev owns a
+  // piece of this task by now, so they are genuinely on it.
+  ok('somebody not on the task cannot attach',
+     (await upload(manager2, task.id, 'nope.txt', 'x')).status === 403);
+
+  /* ---- downloading ---- */
+  const dl = await fetch(`${BASE}/api/attachments/${fileId}`, { headers: { Cookie: lead.cookie } });
+  ok('the file downloads', dl.status === 200);
+  ok('with its contents intact', (await dl.text()) === 'the login page must accept SSO');
+  /*
+   * An HTML or SVG file opened inline would run its own script on this
+   * origin with the viewer's session, so uploads must always be served as
+   * downloads of an opaque type.
+   */
+  ok('never rendered inline', dl.headers.get('content-disposition')?.startsWith('attachment'),
+     dl.headers.get('content-disposition') ?? 'no header');
+  ok('and never content-sniffed', dl.headers.get('x-content-type-options') === 'nosniff');
+  ok('served as an opaque type', dl.headers.get('content-type') === 'application/octet-stream',
+     dl.headers.get('content-type') ?? '');
+
+  ok('an outsider cannot download it',
+     (await fetch(`${BASE}/api/attachments/${fileId}`, { headers: { Cookie: manager2.cookie } })).status === 403);
+  ok('nor can somebody signed out',
+     (await fetch(`${BASE}/api/attachments/${fileId}`)).status === 401);
+
+  /* ---- removing ---- */
+  ok('somebody else cannot remove it',
+     (await call(dev, `/api/attachments/${fileId}`, { method: 'DELETE' })).status === 403);
+  ok('the developer can remove their own',
+     (await call(dev, `/api/attachments/${byDev.body.attachment.id}`, { method: 'DELETE' })).status === 200);
+  ok('a Team Lead can remove anyone’s',
+     (await call(lead, `/api/attachments/${fileId}`, { method: 'DELETE' })).status === 200);
+  ok('and then it is gone',
+     (await fetch(`${BASE}/api/attachments/${fileId}`, { headers: { Cookie: lead.cookie } })).status === 404);
+
+  /* ---- a split piece carries its own files ---- */
+  const parent = await call(manager, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — split files ${RUN}` }) });
+  const split = await call(lead, `/api/tasks/${parent.body.task.id}/split`, {
+    method: 'POST',
+    body: JSON.stringify({ pieces: [
+      { title: 'Backend piece', assigneeId: dev.user.id },
+      { title: 'Frontend piece', assigneeId: otherDev.user.id },
+    ] }),
+  });
+  const [backend, frontend] = ['Backend piece', 'Frontend piece']
+    .map((t) => split.body.task.subtasks.find((s) => s.title === t));
+
+  await upload(lead, backend.id, 'api-contract.txt', 'POST /session');
+  const backendFull = await call(dev, `/api/tasks/${backend.id}`);
+  ok('a file attached to one piece is on that piece',
+     backendFull.body.task.attachments?.length === 1
+     && backendFull.body.task.attachments[0].filename === 'api-contract.txt',
+     JSON.stringify(backendFull.body.task.attachments));
+  ok('and not on the other one',
+     (await call(otherDev, `/api/tasks/${frontend.id}`)).body.task.attachments?.length === 0);
+  ok('so each developer only gets their own documents',
+     (await call(otherDev, `/api/tasks/${backend.id}`)).status === 403);
+
+  await call(ceo, `/api/tasks/${parent.body.task.id}`, { method: 'DELETE' });
+}
+
 console.log('\nDeleting a task');
 {
   const raised = await call(manager, '/api/tasks', {
