@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Info, Link2, Loader2, Mic, Plus, X } from 'lucide-react';
+import { Info, Link2, Loader2, Mic, Paperclip, Plus, X } from 'lucide-react';
 import type { Block, Priority, Tag, TaskFull, User } from '@/lib/types';
-import { emptyDoc } from '@/lib/types';
+import { MAX_ATTACHMENT_BYTES, emptyDoc } from '@/lib/types';
 import { api, serializeDoc } from '@/lib/client';
 import { Modal, PriorityPicker, TagChip } from './ui';
 import { VoiceRecorder } from './VoiceNotes';
+import { fileSize } from './Attachments';
 import { appendTranscriptToDescription, autoTranscribe, useTranscriber } from '@/lib/useTranscriber';
 import BlockEditor from './BlockEditor';
 import { fromDateInput } from './views/shared';
@@ -27,6 +28,7 @@ export default function NewTaskModal({
   const [due, setDue] = useState('');
   // Recorded before the task exists, so they are uploaded right after creation.
   const [pending, setPending] = useState<{ blob: Blob; durationMs: number; url: string }[]>([]);
+  const [files, setFiles] = useState<File[]>([]);
   const [links, setLinks] = useState<{ url: string; label: string }[]>([]);
   const [showLinks, setShowLinks] = useState(false);
   const [tagIds, setTagIds] = useState<string[]>([]);
@@ -51,6 +53,7 @@ export default function NewTaskModal({
       return [];
     });
     setLinks([]);
+    setFiles([]);
     setShowLinks(false);
     setTagIds([]);
     setError('');
@@ -78,6 +81,25 @@ export default function NewTaskModal({
         void autoTranscribe(voiceNote.id, rec.blob, transcribe, (text) =>
           appendTranscriptToDescription(task.id, text)
         );
+      }
+
+      /*
+       * Files need a task id too, so they go up after creation. A file that
+       * fails must not lose the task somebody just wrote — they are told
+       * which one to re-add from the task itself.
+       */
+      const failed: string[] = [];
+      for (const file of files) {
+        try {
+          await api.attachments.upload(task.id, file);
+        } catch {
+          failed.push(file.name);
+        }
+      }
+      if (failed.length) {
+        setError(`Task created, but these files did not upload: ${failed.join(', ')}.`);
+        onCreated(task, routedTo);
+        return;
       }
 
       onCreated(task, routedTo);
@@ -193,6 +215,52 @@ export default function NewTaskModal({
             </div>
           </div>
         )}
+
+        {/* files */}
+        <div className="mb-4">
+          <span className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-medium">
+            <Paperclip size={13} /> Files
+            <span className="font-normal text-[var(--text-tertiary)]">optional</span>
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {files.map((f) => (
+              <span
+                key={f.name + f.size + f.lastModified}
+                className="inline-flex max-w-[240px] items-center gap-1 rounded-full border px-2 py-0.5 text-[11.5px]"
+              >
+                <span className="truncate">{f.name}</span>
+                <span className="shrink-0 text-[var(--text-tertiary)]">{fileSize(f.size)}</span>
+                <button
+                  onClick={() => setFiles((prev) => prev.filter((x) => x !== f))}
+                  className="shrink-0 text-[var(--text-tertiary)] hover:text-red-500"
+                  aria-label={`Remove ${f.name}`}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]">
+              <Paperclip size={12} />
+              {files.length ? 'Add another' : 'Attach a file'}
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const picked = Array.from(e.target.files ?? []);
+                  const tooBig = picked.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+                  if (tooBig) {
+                    setError(`"${tooBig.name}" is ${fileSize(tooBig.size)} — the limit is ${fileSize(MAX_ATTACHMENT_BYTES)}.`);
+                    return;
+                  }
+                  setError('');
+                  setFiles((prev) => [...prev, ...picked]);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+          </div>
+        </div>
 
         {/* voice notes */}
         <div className="mb-4">
