@@ -1423,24 +1423,40 @@ export async function closeTaskConversation(taskId: string, actor: User): Promis
 /* Profile                                                             */
 /* ------------------------------------------------------------------ */
 
-export async function setAvatar(userId: string, data: Buffer, mime: string) {
-  await run('UPDATE users SET avatar_data = ?, avatar_mime = ? WHERE id = ?', [data, mime, userId]);
+/** Returns the new version stamp, which is what makes the change visible. */
+export async function setAvatar(userId: string, data: Buffer, mime: string): Promise<number> {
+  const version = Date.now();
+  await run(
+    'UPDATE users SET avatar_data = ?, avatar_mime = ?, avatar_updated_at = ? WHERE id = ?',
+    [data, mime, version, userId]
+  );
   invalidateUserCache();
+  return version;
 }
 
-export async function getAvatar(userId: string): Promise<{ data: Buffer; mime: string } | null> {
-  const row = await one<{ avatar_data: Buffer | null; avatar_mime: string | null }>(
-    'SELECT avatar_data, avatar_mime FROM users WHERE id = ?', [userId]
+export async function getAvatar(
+  userId: string
+): Promise<{ data: Buffer; mime: string; version: number } | null> {
+  const row = await one<{ avatar_data: Buffer | null; avatar_mime: string | null; avatar_updated_at: string | number | null }>(
+    'SELECT avatar_data, avatar_mime, avatar_updated_at FROM users WHERE id = ?', [userId]
   );
   if (!row?.avatar_data) return null;
-  return { data: row.avatar_data, mime: row.avatar_mime ?? 'image/png' };
+  return {
+    data: row.avatar_data,
+    mime: row.avatar_mime ?? 'image/png',
+    version: Number(row.avatar_updated_at ?? 0),
+  };
 }
 
-export async function usersWithAvatars(orgId: string): Promise<Set<string>> {
-  const rows = await many<{ id: string }>(
-    'SELECT id FROM users WHERE avatar_data IS NOT NULL AND org_id = ?', [orgId]
+/**
+ * Who has a picture, and which one — the version stamp travels with the id so
+ * every browser asks for a different URL the moment somebody changes theirs.
+ */
+export async function usersWithAvatars(orgId: string): Promise<{ id: string; v: number }[]> {
+  const rows = await many<{ id: string; avatar_updated_at: string | number | null }>(
+    'SELECT id, avatar_updated_at FROM users WHERE avatar_data IS NOT NULL AND org_id = ?', [orgId]
   );
-  return new Set(rows.map((r) => r.id));
+  return rows.map((r) => ({ id: r.id, v: Number(r.avatar_updated_at ?? 0) }));
 }
 
 export async function getPasswordHash(userId: string): Promise<string | null> {

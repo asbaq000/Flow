@@ -304,6 +304,14 @@ CREATE INDEX IF NOT EXISTS idx_message_files_msg ON message_files(message_id);
 -- Profile pictures, kept small and in the row like everything else.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
+-- When the picture last changed. It is the cache key: the URL carries it, so
+-- a new picture is a new URL for everyone, not just for the person who
+-- uploaded it and only until they reload.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_updated_at BIGINT;
+-- Pictures that predate the stamp get one now, so their URL changes once and
+-- every browser holding an old copy asks again instead of waiting out a timer.
+UPDATE users SET avatar_updated_at = (extract(epoch from now()) * 1000)::bigint
+  WHERE avatar_data IS NOT NULL AND avatar_updated_at IS NULL;
 
 -- Browser push. One row per browser a person has said yes in.
 CREATE TABLE IF NOT EXISTS push_subscriptions (

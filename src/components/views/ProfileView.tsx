@@ -40,8 +40,8 @@ export default function ProfileView({
     setAvatarBusy(true);
     setMsg(null);
     try {
-      await api.profile.setAvatar(file);
-      avatarChanged(me.id);
+      const { version } = await api.profile.setAvatar(file);
+      avatarChanged(me.id, version);
       setAvatarKey((k) => k + 1);
       setMsg({ kind: 'ok', text: 'Picture updated' });
     } catch (err) {

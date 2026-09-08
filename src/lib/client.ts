@@ -298,7 +298,7 @@ export const api = {
     remove: (id: string) => request<{ ok: true }>(`/api/messages/${id}`, { method: 'DELETE' }),
   },
   profile: {
-    withPictures: () => request<{ ids: string[] }>('/api/users/avatars'),
+    withPictures: () => request<{ avatars: { id: string; v: number }[] }>('/api/users/avatars'),
     avatarUrl: (userId: string) => `/api/users/${userId}/avatar`,
     setAvatar: async (file: File) => {
       const form = new FormData();
@@ -307,7 +307,7 @@ export const api = {
       const text = await res.text();
       const data = text ? JSON.parse(text) : {};
       if (!res.ok) throw new ApiError(data.error ?? 'Upload failed', res.status);
-      return data as { ok: true };
+      return data as { ok: true; version: number };
     },
     changePassword: (current: string, next: string) =>
       request<{ ok: true; signedOut: boolean }>('/api/users/me/password', {

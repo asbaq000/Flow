@@ -8,7 +8,7 @@ type Ctx = { params: Promise<{ id: string }> };
 const ALLOWED = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const MAX_BYTES = 1024 * 1024;
 
-export async function GET(_req: Request, { params }: Ctx) {
+export async function GET(req: Request, { params }: Ctx) {
   const user = await currentUser();
   if (!user) return fail('Not signed in', 401);
 
@@ -18,11 +18,23 @@ export async function GET(_req: Request, { params }: Ctx) {
   const avatar = await getAvatar(id);
   if (!avatar) return fail('No picture', 404);
 
+  /*
+   * A picture is cached hard but never blindly: the URL carries the version
+   * stamp, and the ETag carries it too. So a browser holding an old copy
+   * revalidates and is told about the new one in a 304-sized answer, rather
+   * than showing yesterday's face until some timer runs out.
+   */
+  const etag = `"${id}-${avatar.version}"`;
+  if (req.headers.get('if-none-match') === etag) {
+    return new Response(null, { status: 304, headers: { ETag: etag, 'Cache-Control': 'private, no-cache' } });
+  }
+
   return new Response(new Uint8Array(avatar.data), {
     headers: {
       'Content-Type': avatar.mime,
       'X-Content-Type-Options': 'nosniff',
-      'Cache-Control': 'private, max-age=300',
+      'Cache-Control': 'private, no-cache',
+      ETag: etag,
     },
   });
 }
@@ -42,6 +54,6 @@ export async function POST(req: Request, { params }: Ctx) {
   const mime = (file.type || '').split(';')[0].trim();
   if (!ALLOWED.has(mime)) return fail('Use a PNG, JPEG, WebP or GIF');
 
-  await setAvatar(user.id, Buffer.from(await file.arrayBuffer()), mime);
-  return ok({ ok: true });
+  const version = await setAvatar(user.id, Buffer.from(await file.arrayBuffer()), mime);
+  return ok({ ok: true, version });
 }

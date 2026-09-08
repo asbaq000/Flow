@@ -13,21 +13,30 @@ import type { Priority, Status, Tag, User } from '@/lib/types';
 const SIZES = { xs: 18, sm: 22, md: 28, lg: 36, xl: 56 } as const;
 
 /**
- * Who has a picture, learned once from /api/users/avatars. Nobody else ever
- * gets an <img>, so there is no request that 404s and no broken glyph while
- * the browser finds out. A per-id version busts the cache after an upload.
+ * Who has a picture and which version of it, learned from /api/users/avatars.
+ * Nobody else ever gets an <img>, so there is no request that 404s and no
+ * broken glyph while the browser finds out.
+ *
+ * The version comes from the server, not from this tab. It used to be set
+ * locally on upload, which meant a reload asked for the same URL as before
+ * the change and the browser answered from its own cache — your new picture
+ * lasted until you refreshed, and nobody else saw it at all.
  */
 const knownAvatars = new Set<string>();
 const avatarVersion = new Map<string, number>();
 const listeners = new Set<() => void>();
-export function setKnownAvatars(ids: string[]) {
+export function setKnownAvatars(avatars: { id: string; v: number }[]) {
   knownAvatars.clear();
-  ids.forEach((id) => knownAvatars.add(id));
+  avatars.forEach(({ id, v }) => {
+    knownAvatars.add(id);
+    avatarVersion.set(id, v);
+  });
   listeners.forEach((fn) => fn());
 }
-export function avatarChanged(userId: string) {
+/** After an upload: the server's stamp, so this tab matches every other one. */
+export function avatarChanged(userId: string, version: number) {
   knownAvatars.add(userId);
-  avatarVersion.set(userId, Date.now());
+  avatarVersion.set(userId, version);
   listeners.forEach((fn) => fn());
 }
 

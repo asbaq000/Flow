@@ -911,10 +911,37 @@ console.log('\nProfile');
   };
   ok('an SVG is refused as a picture — it can run script',
      (await upload(dev, '<svg onload="alert(1)"/>', 'image/svg+xml', 'x.svg')).status === 400);
-  ok('a PNG is accepted', (await upload(dev, png, 'image/png', 'me.png')).status === 200);
+  const first = await upload(dev, png, 'image/png', 'me.png');
+  ok('a PNG is accepted', first.status === 200);
+  const firstVersion = (await first.json()).version;
+  ok('the upload answers with a version stamp', typeof firstVersion === 'number' && firstVersion > 0, String(firstVersion));
   const pic = await fetch(`${BASE}/api/users/${dev.user.id}/avatar`, { headers: { Cookie: lead.cookie } });
   ok('the picture is served back', pic.status === 200 && pic.headers.get('content-type') === 'image/png');
   ok('and never content-sniffed', pic.headers.get('x-content-type-options') === 'nosniff');
+
+  // A changed picture has to be a changed URL, or every browser keeps showing
+  // the old one from its own cache — which is exactly what used to happen.
+  const listed = (await call(lead, '/api/users/avatars')).body.avatars ?? [];
+  ok('the roster carries the version', listed.find((a) => a.id === dev.user.id)?.v === firstVersion,
+     JSON.stringify(listed.find((a) => a.id === dev.user.id)));
+  const tag = pic.headers.get('etag');
+  ok('the picture is tagged with it', tag === `"${dev.user.id}-${firstVersion}"`, tag ?? 'none');
+  ok('it is never served without revalidating', (pic.headers.get('cache-control') ?? '').includes('no-cache'),
+     pic.headers.get('cache-control') ?? 'none');
+  ok('an unchanged picture answers 304',
+     (await fetch(`${BASE}/api/users/${dev.user.id}/avatar`,
+       { headers: { Cookie: lead.cookie, 'If-None-Match': tag } })).status === 304);
+
+  const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  const second = await upload(dev, gif, 'image/gif', 'me.gif');
+  const secondVersion = (await second.json()).version;
+  ok('a new picture gets a new stamp', secondVersion > firstVersion, `${firstVersion} -> ${secondVersion}`);
+  const stale = await fetch(`${BASE}/api/users/${dev.user.id}/avatar`,
+    { headers: { Cookie: lead.cookie, 'If-None-Match': tag } });
+  ok('a browser holding the old one is given the new one, not a 304', stale.status === 200, String(stale.status));
+  ok('and it is the new picture', stale.headers.get('content-type') === 'image/gif', stale.headers.get('content-type'));
+  ok('the roster moves on too',
+     (await call(lead, '/api/users/avatars')).body.avatars.find((a) => a.id === dev.user.id)?.v === secondVersion);
   ok('somebody with no picture answers 404',
      (await fetch(`${BASE}/api/users/${manager2.user.id}/avatar`, { headers: { Cookie: lead.cookie } })).status === 404);
 

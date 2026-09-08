@@ -196,7 +196,7 @@ export default function Workspace({
     api.conversations.list()
       .then(({ conversations }) => setMessageUnread(conversations.reduce((n, c) => n + c.unread, 0)))
       .catch(() => {});
-    api.profile.withPictures().then(({ ids }) => setKnownAvatars(ids)).catch(() => {});
+    api.profile.withPictures().then(({ avatars }) => setKnownAvatars(avatars)).catch(() => {});
   }, []);
 
   // Rendered after mount so the server and the browser never disagree on the date.
