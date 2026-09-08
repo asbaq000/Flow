@@ -21,7 +21,7 @@ export async function GET(_req: Request, { params }: Ctx) {
   const { id: raw } = await params;
   const id = raw === 'me' ? user.id : raw;
   const target = await getUser(id);
-  if (!target) return fail('Person not found', 404);
+  if (!target || target.org_id !== user.org_id) return fail('Person not found', 404);
   if (!canViewTaskSheet(user, target.id)) return fail('You cannot export this record', 403);
 
   const sheet = await taskSheet(id);

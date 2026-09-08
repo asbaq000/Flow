@@ -12,6 +12,7 @@ export async function GET(req: Request) {
 
   return ok({
     meetings: await listMeetings({
+      orgId: user.org_id,
       // Leads run the schedule, so they see all of it. Everyone else sees
       // only the calls they are actually in.
       forUserId: isLead(user) ? null : user.id,

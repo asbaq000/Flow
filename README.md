@@ -18,15 +18,11 @@ npm run dev
 
 Open <http://localhost:3000>.
 
-The workspace starts **empty**. Anyone can sign up as a **Manager**, **Team Lead** or **Developer**.
+The workspace starts **empty**. The first person chooses **Start an organisation** on the signup form, names it, and becomes its **CEO**. Everyone else picks **Join with a code**, enters the invite code the CEO hands out (it is on the CEO's profile page, alongside a button to mint a fresh one), and chooses **Manager**, **Team Lead** or **Developer**. The CEO can adjust roles from the People page afterwards.
 
-The **CEO** seat is claimed with a setup code, not by signing up first — otherwise whoever happened to register first would own the workspace. Set one before you start:
+One install can hold **many organisations**. Each is a wall: its people, tasks, tags, meetings and messages are invisible to every other organisation, and task numbers count from TSK-1 inside each one.
 
-```bash
-CEO_SETUP_CODE=pick-something-secret npm run dev
-```
-
-Then on the signup form click **“I have a CEO setup code”** and enter it. That account is created as CEO regardless of the role selected. Everyone else signs up normally, and the CEO can adjust roles from the People page afterwards.
+If you are upgrading an install from before organisations existed, everything already in it is adopted into one organisation called “My organization” on the first request — rename it from the CEO's profile page. The old `CEO_SETUP_CODE` route still works for that upgraded organisation only.
 
 Other commands:
 
@@ -38,7 +34,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs 130 end-to-end checks against a running server (start it with `CEO_SETUP_CODE=e2e-setup-code`, or set `CEO_SETUP_CODE` to match). It creates its own accounts on `@e2e.local` and deletes every task it makes — **run it locally, never against production**, or you will be left with test accounts to clean up.
+`npm test` runs the end-to-end suite against a running server (start it with `CEO_SETUP_CODE=e2e-setup-code`, or set `CEO_SETUP_CODE` to match — only the legacy-path checks need it). It creates its own accounts on `@e2e.local` and deletes every task it makes — **run it locally, never against production**, or you will be left with test accounts to clean up.
 
 ---
 
@@ -270,7 +266,6 @@ The app talks to PostgreSQL. Locally that is **PGlite**, an embedded Postgres th
 |---|---|
 | `DATABASE_URL` | the Supabase pooling URI |
 | `APP_URL` | `https://your-app.vercel.app` |
-| `CEO_SETUP_CODE` | a secret only you know — used once to claim the CEO seat |
 | `SMTP_HOST` | `smtp.gmail.com` |
 | `SMTP_PORT` | `587` |
 | `SMTP_USER` | your Gmail address |
@@ -279,9 +274,7 @@ The app talks to PostgreSQL. Locally that is **PGlite**, an embedded Postgres th
 
 **4. Deploy.** The schema creates itself on first request — every statement is `CREATE TABLE IF NOT EXISTS`, so there is no migration step to run and no way to double-apply it.
 
-**5. Claim the CEO seat.** Visit your URL, choose **Sign up**, click **“I have a CEO setup code”** and enter your `CEO_SETUP_CODE`. That account becomes the CEO.
-
-Once your CEO account exists you can delete `CEO_SETUP_CODE` from Vercel and redeploy — nobody can claim CEO again without it. Everyone else signs up as Manager, Team Lead or Developer.
+**5. Start your organisation.** Visit your URL, choose **Sign up** → **Start an organisation**, and name it. That account becomes the CEO. Everyone else joins with the invite code from your profile page, as Manager, Team Lead or Developer.
 
 ### What to watch on the free tier
 
@@ -329,7 +322,8 @@ src/components/          UI, incl. BlockEditor, VoiceNotes, ProgressPanel,
 - Task links are restricted to `http`/`https` on **both** the create and add-link paths, so `javascript:` URLs can't be stored.
 - Every permission check runs server-side. The UI hiding a button is a convenience, not the control.
 - The workspace refuses to demote its last remaining CEO.
-- The CEO seat requires a server-side setup code, compared in constant time, so it cannot be claimed by registering first or guessed character by character.
+- The CEO seat comes from founding an organisation, never from registering first. Joining one needs its invite code, which the CEO can replace at any moment; the legacy setup code is compared in constant time.
+- Every read and write is scoped to the signed-in person's organisation. A task, person, meeting or conversation id from another organisation answers as if it did not exist.
 - Account removal is authority-checked server-side: a Team Lead cannot remove another Lead, nobody can remove the CEO, and nobody can remove themselves.
 - Password reset tokens are single-use, expire after an hour, and invalidate every existing session when redeemed.
 - The forgot-password endpoint answers identically for known and unknown emails.

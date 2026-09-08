@@ -68,7 +68,7 @@ export async function currentUser(): Promise<User | null> {
   if (!token) return null;
 
   const row = await one<User & { _exp: number }>(
-    `SELECT u.id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at,
+    `SELECT u.id, u.org_id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at,
             s.expires_at AS _exp
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token = ?`,
@@ -108,13 +108,14 @@ export const isCeo = (u: User) => u.role === 'CEO';
  * the lightest open load, preferring someone other than the person raising it —
  * but a Lead who raises a task keeps it if they are the only Lead.
  */
-export async function pickRoutingLead(raisedById?: string): Promise<User | null> {
+export async function pickRoutingLead(orgId: string, raisedById?: string): Promise<User | null> {
   const leads = await many<User & { load: number }>(
-    `SELECT u.id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at,
+    `SELECT u.id, u.org_id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at,
             (SELECT COUNT(*)::int FROM tasks t
              WHERE t.assignee_id = u.id AND t.status != 'DONE' AND t.archived = 0) AS load
-     FROM users u WHERE u.role = 'TEAM_LEAD'
-     ORDER BY load ASC, u.created_at ASC`
+     FROM users u WHERE u.role = 'TEAM_LEAD' AND u.org_id = ?
+     ORDER BY load ASC, u.created_at ASC`,
+    [orgId]
   );
 
   const others = leads.filter((l) => l.id !== raisedById);
@@ -123,7 +124,8 @@ export async function pickRoutingLead(raisedById?: string): Promise<User | null>
 
   // No Team Lead exists yet — fall back to the CEO so work is never orphaned.
   return one<User>(
-    `SELECT id, email, name, role, avatar_color, title, created_at
-     FROM users WHERE role = 'CEO' ORDER BY created_at ASC LIMIT 1`
+    `SELECT id, org_id, email, name, role, avatar_color, title, created_at
+     FROM users WHERE role = 'CEO' AND org_id = ? ORDER BY created_at ASC LIMIT 1`,
+    [orgId]
   );
 }

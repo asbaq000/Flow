@@ -15,6 +15,11 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>(
     isEmptyWorkspace ? 'signup' : 'login'
   );
+  // Two doors into the app: found an organisation (and be its CEO) or join
+  // one with the code its CEO hands out. A brand-new install opens on the first.
+  const [entry, setEntry] = useState<'join' | 'create'>(isEmptyWorkspace ? 'create' : 'join');
+  const [orgName, setOrgName] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [setupCode, setSetupCode] = useState('');
   const [showSetup, setShowSetup] = useState(false);
   const [notice, setNotice] = useState('');
@@ -54,7 +59,12 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           mode === 'signup'
-            ? { email, password, name, role, setupCode: setupCode.trim() || undefined }
+            ? {
+                email, password, name, role,
+                orgName: entry === 'create' ? orgName.trim() : undefined,
+                inviteCode: entry === 'join' ? inviteCode.trim() || undefined : undefined,
+                setupCode: entry === 'join' ? setupCode.trim() || undefined : undefined,
+              }
             : { email, password }
         ),
       });
@@ -128,16 +138,18 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
               ? 'Reset your password'
               : mode === 'login'
                 ? 'Welcome back'
-                : isEmptyWorkspace
-                  ? 'Set up your workspace'
-                  : 'Create your account'}
+                : entry === 'create'
+                  ? 'Start your organisation'
+                  : 'Join your team'}
           </h2>
           <p className="mt-1.5 text-[14px] text-[var(--text-secondary)]">
             {mode === 'forgot'
               ? 'Enter your email and we will send you a link to choose a new one.'
               : mode === 'login'
                 ? 'Sign in to pick up where you left off.'
-                : 'Choose the role that matches your seat on the team.'}
+                : entry === 'create'
+                  ? 'Name your organisation. You will be its CEO, and everyone else joins with the invite code you give them.'
+                  : 'Enter the invite code from your CEO and choose the role that matches your seat on the team.'}
           </p>
 
           <form onSubmit={submit} className="mt-7 space-y-4">
@@ -198,6 +210,53 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
             )}
 
             {mode === 'signup' && (
+              <div className="grid grid-cols-2 gap-1 rounded-lg p-1" style={{ background: 'var(--bg-subtle)' }}>
+                {([['join', 'Join with a code'], ['create', 'Start an organisation']] as const).map(([id, label]) => (
+                  <button
+                    type="button"
+                    key={id}
+                    onClick={() => { setEntry(id); setError(''); }}
+                    className="rounded-md px-2 py-1.5 text-[12.5px] font-medium transition-colors"
+                    style={{
+                      background: entry === id ? 'var(--bg-card)' : 'transparent',
+                      color: entry === id ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      boxShadow: entry === id ? 'var(--shadow-sm)' : undefined,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {mode === 'signup' && entry === 'create' && (
+              <Field label="Organisation name" hint="You will be its CEO">
+                <input
+                  className="input"
+                  value={orgName}
+                  onChange={(e) => setOrgName(e.target.value)}
+                  placeholder="Acme Ltd"
+                  autoComplete="organization"
+                  required
+                />
+              </Field>
+            )}
+
+            {mode === 'signup' && entry === 'join' && (
+              <Field label="Invite code" hint="Your CEO has it">
+                <input
+                  className="input font-mono uppercase tracking-[0.12em]"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                  placeholder="XXXX-XXXX"
+                  autoComplete="off"
+                  spellCheck={false}
+                  required={!setupCode.trim()}
+                />
+              </Field>
+            )}
+
+            {mode === 'signup' && entry === 'join' && (
               <Field label="Your role">
                 <div className="space-y-1.5">
                   {SIGNUP_ROLES.map((r) => (
@@ -230,12 +289,12 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
               </Field>
             )}
 
-            {mode === 'signup' && (
+            {mode === 'signup' && entry === 'join' && (
               <div>
                 {showSetup ? (
                   <Field
                     label="CEO setup code"
-                    hint="Only if you are claiming the CEO seat"
+                    hint="Upgraded installs only"
                   >
                     <input
                       className="input"
@@ -246,8 +305,8 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
                       autoComplete="off"
                     />
                     <p className="mt-1 text-[11.5px] text-[var(--text-tertiary)]">
-                      Set as <code>CEO_SETUP_CODE</code> on the server. With a valid code this
-                      account is created as CEO instead of the role above.
+                      The <code>CEO_SETUP_CODE</code> from the server claims the CEO seat of a
+                      workspace set up before organisations existed. No invite code needed with it.
                     </p>
                   </Field>
                 ) : (

@@ -1,7 +1,7 @@
 'use client';
 
 import type {
-  Attachment, Block, Comment, ConversationFull, MeetingFull, Message, Notification, Priority,
+  Attachment, Block, Comment, ConversationFull, MeetingFull, Message, Notification, Organization, Priority,
   ProgressUpdate, Status, Tag, TaskFull,
   TaskSheet, User, VoiceNote,
 } from './types';
@@ -278,6 +278,11 @@ export const api = {
         method: 'POST', body: JSON.stringify({ current, next }),
       }),
     exportUrl: (userId: string) => `/api/users/${userId}/export`,
+  },
+  org: {
+    get: () => request<{ org: Organization }>('/api/org'),
+    update: (body: { name?: string; rotateInvite?: boolean }) =>
+      request<{ org: Organization }>('/api/org', { method: 'PATCH', body: JSON.stringify(body) }),
   },
   push: {
     key: () => request<{ enabled: boolean; key: string | null }>('/api/push/key'),

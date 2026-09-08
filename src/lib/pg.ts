@@ -229,12 +229,20 @@ export async function tx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
 }
 
 /** Next human-facing task number, allocated atomically. */
-export async function nextTaskSeq(): Promise<number> {
+/**
+ * Next human-facing task number, allocated atomically, per organisation. The
+ * first allocation for an organisation seeds the counter from the tasks it
+ * already has, so an install upgraded in place carries on from where it was
+ * instead of handing out a second TSK-1.
+ */
+export async function nextTaskSeq(orgId: string): Promise<number> {
   const row = await one<{ value: number }>(
-    `INSERT INTO counters (name, value) VALUES ('task_seq', 1)
+    `INSERT INTO counters (name, value)
+       VALUES (?, (SELECT COALESCE(MAX(seq), 0) FROM tasks WHERE org_id = ?) + 1)
      ON CONFLICT (name) DO UPDATE
-       SET value = GREATEST(counters.value, (SELECT COALESCE(MAX(seq), 0) FROM tasks)) + 1
-     RETURNING value`
+       SET value = GREATEST(counters.value, (SELECT COALESCE(MAX(seq), 0) FROM tasks WHERE org_id = ?)) + 1
+     RETURNING value`,
+    [`task_seq:${orgId}`, orgId, orgId]
   );
   return Number(row?.value ?? 1);
 }

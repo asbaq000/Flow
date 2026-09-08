@@ -10,15 +10,15 @@ export default async function WorkspacePage() {
   const me = await currentUser();
   if (!me) redirect('/login');
 
-  const tasks = (await listTasks({ topLevelOnly: true })).filter((t) => canView(me, t));
+  const tasks = (await listTasks({ orgId: me.org_id, topLevelOnly: true })).filter((t) => canView(me, t));
   const notifications = await listNotifications(me.id);
 
   return (
     <Workspace
       me={me}
       initialTasks={tasks}
-      initialUsers={await allUsers()}
-      initialTags={await allTags()}
+      initialUsers={await allUsers(me.org_id)}
+      initialTags={await allTags(me.org_id)}
       initialNotifications={notifications}
     />
   );

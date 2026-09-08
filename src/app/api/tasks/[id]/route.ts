@@ -25,7 +25,7 @@ export async function GET(_req: Request, { params }: Ctx) {
   const [comments, activity, everyone] = await Promise.all([
     listComments(id),
     listActivity(id),
-    allUsers(),
+    allUsers(user.org_id),
   ]);
 
   return ok({
@@ -91,7 +91,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
     if (body.assigneeId) {
       // Work only flows down to Developers — never sideways to an Employee.
       const target = await getUser(body.assigneeId);
-      if (!target) return fail('That person is not in this workspace', 404);
+      if (!target || target.org_id !== user.org_id) return fail('That person is not in this workspace', 404);
       if (!isAssignableRole(target.role)) {
         return fail(`Work can only be assigned to a Developer. ${target.name} is not one.`, 400);
       }

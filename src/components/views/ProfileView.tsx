@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Bell, BellOff, Camera, Check, Download, KeyRound, Loader2, Moon, Sun, TrendingUp,
+  Bell, BellOff, Building2, Camera, Check, Copy, Download, KeyRound, Loader2, Moon, RefreshCw, Sun,
+  TrendingUp,
 } from 'lucide-react';
-import type { TaskSheet, User } from '@/lib/types';
+import type { Organization, TaskSheet, User } from '@/lib/types';
 import { api } from '@/lib/client';
 import { usePush } from '@/lib/usePush';
 import { Avatar, avatarChanged, roleShort } from '../ui';
@@ -120,6 +121,8 @@ export default function ProfileView({
           </section>
         )}
 
+        <OrganizationCard me={me} />
+
         <div className="grid gap-5 md:grid-cols-2">
           <PasswordCard onSignedOut={onSignedOut} />
           <section className="card p-4">
@@ -196,6 +199,102 @@ function PasswordCard({ onSignedOut }: { onSignedOut: () => void }) {
           <button onClick={submit} disabled={busy || !current || next.length < 8} className="btn btn-primary self-start">
             {busy ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />} Change password
           </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The organisation this person belongs to. The CEO can rename it and hands out
+ * the invite code that brings everyone else in; a fresh code shuts the old one.
+ */
+function OrganizationCard({ me }: { me: User }) {
+  const ceo = me.role === 'CEO';
+  const [org, setOrg] = useState<Organization | null>(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState<'name' | 'rotate' | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api.org.get().then((d) => { setOrg(d.org); setName(d.org.name); }).catch(() => {});
+  }, []);
+
+  const rename = async () => {
+    if (!org || name.trim().length < 2 || name.trim() === org.name) return;
+    setBusy('name'); setError('');
+    try {
+      const d = await api.org.update({ name: name.trim() });
+      setOrg(d.org); setName(d.org.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not rename');
+    } finally { setBusy(null); }
+  };
+
+  const rotate = async () => {
+    if (!confirm('Mint a new invite code? The current one stops working immediately.')) return;
+    setBusy('rotate'); setError('');
+    try {
+      setOrg((await api.org.update({ rotateInvite: true })).org);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not change the code');
+    } finally { setBusy(null); }
+  };
+
+  const copy = async () => {
+    if (!org?.invite_code) return;
+    try {
+      await navigator.clipboard.writeText(org.invite_code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard blocked; the code is still on screen to copy by hand */ }
+  };
+
+  return (
+    <section className="card mb-5 p-4">
+      <h3 className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold"><Building2 size={14} /> Organisation</h3>
+      {!org ? (
+        <p className="text-[12.5px] text-[var(--text-tertiary)]">Loading…</p>
+      ) : ceo ? (
+        <div className="flex flex-col gap-3">
+          <p className="text-[12.5px] text-[var(--text-secondary)]">
+            Everything here — people, tasks, meetings, messages — belongs to this organisation and is invisible to any other.
+          </p>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="min-w-[220px] flex-1">
+              <span className="mb-1 block text-[11.5px] font-medium text-[var(--text-secondary)]">Name</span>
+              <input className="input text-[13px]" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+            </label>
+            <button onClick={rename} disabled={busy !== null || name.trim().length < 2 || name.trim() === org.name} className="btn btn-outline">
+              {busy === 'name' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Rename
+            </button>
+          </div>
+          <div>
+            <span className="mb-1 block text-[11.5px] font-medium text-[var(--text-secondary)]">Invite code</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="rounded-md border px-3 py-1.5 font-mono text-[15px] font-semibold tracking-[0.14em]" style={{ background: 'var(--bg-subtle)' }}>
+                {org.invite_code}
+              </code>
+              <button onClick={copy} className="btn btn-outline">
+                {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}
+              </button>
+              <button onClick={rotate} disabled={busy !== null} className="btn btn-outline">
+                {busy === 'rotate' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} New code
+              </button>
+            </div>
+            <p className="mt-1.5 text-[12px] text-[var(--text-tertiary)]">
+              Give this to anyone joining. They enter it on the signup form, pick their role, and land in your organisation. A new code shuts the old one out.
+            </p>
+          </div>
+          {error && <p className="text-[12px] text-red-600">{error}</p>}
+        </div>
+      ) : (
+        <div>
+          <p className="text-[15px] font-semibold">{org.name}</p>
+          <p className="mt-0.5 text-[12.5px] text-[var(--text-secondary)]">
+            You are part of this organisation. Your CEO holds the invite code for bringing new people in.
+          </p>
         </div>
       )}
     </section>

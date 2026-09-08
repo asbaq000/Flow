@@ -10,5 +10,5 @@ import { usersWithAvatars } from '@/lib/store';
 export async function GET() {
   const user = await currentUser();
   if (!user) return fail('Not signed in', 401);
-  return ok({ ids: [...(await usersWithAvatars())] });
+  return ok({ ids: [...(await usersWithAvatars(user.org_id))] });
 }

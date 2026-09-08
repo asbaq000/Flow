@@ -10,6 +10,7 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /** Leads see every meeting; everyone else only the ones they are in. */
 function canSee(user: User, meeting: MeetingFull): boolean {
+  if (meeting.org_id !== user.org_id) return false;
   return (
     isLead(user) ||
     meeting.organizer_id === user.id ||

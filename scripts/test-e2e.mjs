@@ -32,11 +32,13 @@ async function login(email, password = PW) {
   return { cookie: cookieOf(res), user };
 }
 
-async function signup(email, name, role, setupCode) {
+// `extra` is how the account gets into an organisation: { orgName } founds
+// one, { inviteCode } joins one, { setupCode } claims a pre-organisation CEO seat.
+async function signup(email, name, role, extra = {}) {
   const res = await fetch(`${BASE}/api/auth/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password: PW, name, role, setupCode }),
+    body: JSON.stringify({ email, password: PW, name, role, ...extra }),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -47,11 +49,11 @@ async function signup(email, name, role, setupCode) {
 }
 
 /** Signs in if the account exists, otherwise creates it. */
-async function ensure(email, name, role, setupCode) {
+async function ensure(email, name, role, extra) {
   try {
     return await login(email);
   } catch {
-    return await signup(email, name, role, setupCode);
+    return await signup(email, name, role, extra);
   }
 }
 
@@ -67,30 +69,37 @@ const call = async (sess, path, init = {}) => {
 console.log('\n=== Flow · hierarchy & permission checks ===\n');
 
 /* ---------- bootstrap the cast ---------- */
-// The CEO seat is claimed with the server's setup code, not by signing up
-// first. CEO_SETUP_CODE must match what the app is running with.
+// Founding an organisation is what makes someone CEO. On an empty database the
+// chief founds "E2E Org"; on a database that already has them, everyone just
+// signs in. CEO_SETUP_CODE is only needed for the legacy-path checks below.
 const SETUP_CODE = process.env.CEO_SETUP_CODE ?? 'e2e-setup-code';
 // Throwaway accounts get a per-run suffix so the suite can be run repeatedly
 // against the same database without colliding on the unique email index.
 const RUN = Math.random().toString(36).slice(2, 8);
-let ceo = await ensure('ceo@e2e.local', 'E2E Chief', 'MANAGER', SETUP_CODE);
-
-const manager  = await ensure('manager1@e2e.local', 'E2E Manager One', 'MANAGER');
-const manager2 = await ensure('manager2@e2e.local', 'E2E Manager Two', 'MANAGER');
-const lead     = await ensure('lead1@e2e.local',    'E2E Lead One',    'TEAM_LEAD');
-const lead2    = await ensure('lead2@e2e.local',    'E2E Lead Two',    'TEAM_LEAD');
-const dev      = await ensure('dev1@e2e.local',     'E2E Dev One',     'DEV');
-const otherDev = await ensure('dev2@e2e.local',     'E2E Dev Two',     'DEV');
+let ceo = await ensure('ceo@e2e.local', 'E2E Chief', 'MANAGER', { orgName: 'E2E Org' });
 
 if (ceo.user.role !== 'CEO') {
   // Someone else already holds the CEO seat, so this run cannot self-promote.
   console.error(
     `\nThis suite needs ceo@e2e.local to be the CEO, but it is ${ceo.user.role}.` +
-    `\nStart the server with CEO_SETUP_CODE=${SETUP_CODE} (see .env.example),` +
-    `\nor run against an empty database.\n`
+    `\nRun against an empty database, or make that account the CEO first.\n`
   );
   process.exit(1);
 }
+
+// Everyone else joins the chief's organisation with its invite code.
+const INVITE = (await call(ceo, '/api/org')).body.org?.invite_code;
+if (!INVITE) {
+  console.error('\nThe CEO could not read the invite code from /api/org.\n');
+  process.exit(1);
+}
+const join = { inviteCode: INVITE };
+const manager  = await ensure('manager1@e2e.local', 'E2E Manager One', 'MANAGER',   join);
+const manager2 = await ensure('manager2@e2e.local', 'E2E Manager Two', 'MANAGER',   join);
+const lead     = await ensure('lead1@e2e.local',    'E2E Lead One',    'TEAM_LEAD', join);
+const lead2    = await ensure('lead2@e2e.local',    'E2E Lead Two',    'TEAM_LEAD', join);
+const dev      = await ensure('dev1@e2e.local',     'E2E Dev One',     'DEV',       join);
+const otherDev = await ensure('dev2@e2e.local',     'E2E Dev Two',     'DEV',       join);
 
 // Roles are honoured at signup, but re-running against an existing workspace
 // could find them changed — put everyone back where the tests expect them.
@@ -672,7 +681,7 @@ console.log('\nMessaging');
 console.log('\nProfile');
 {
   // A throwaway account, because changing a password signs every session out.
-  const throwaway = await signup(`profile-${RUN}@e2e.local`, 'Profile Tester', 'DEV');
+  const throwaway = await signup(`profile-${RUN}@e2e.local`, 'Profile Tester', 'DEV', join);
 
   ok('a short new password is refused',
      (await call(throwaway, '/api/users/me/password', {
@@ -878,8 +887,16 @@ ok('a short new password is refused', (await fetch(`${BASE}/api/auth/reset`, {
 
 console.log('\nThe CEO seat is claimed, not inherited');
 {
-  const plain = await signup(`firstcomer-${RUN}@e2e.local`, 'First Comer', 'MANAGER');
-  ok('signing up without a code never yields CEO', plain.user.role === 'MANAGER', plain.user.role);
+  const plain = await signup(`firstcomer-${RUN}@e2e.local`, 'First Comer', 'MANAGER', join);
+  ok('joining with an invite code never yields CEO', plain.user.role === 'MANAGER', plain.user.role);
+  ok('it lands you in that organisation', plain.user.org_id === ceo.user.org_id);
+  ok('signing up with no code at all is refused', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `nocode-${RUN}@e2e.local`, password: PW, name: 'No Code', role: 'DEV' }) })).status === 400);
+  ok('a made-up invite code is refused', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `badinvite-${RUN}@e2e.local`, password: PW, name: 'Bad Invite',
+                           role: 'DEV', inviteCode: 'NOPE-NOPE' }) })).status === 403);
   ok('a wrong setup code is refused', (await fetch(`${BASE}/api/auth/signup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: `wrongcode-${RUN}@e2e.local`, password: PW, name: 'Wrong Code',
@@ -893,7 +910,7 @@ console.log('\nThe CEO seat is claimed, not inherited');
 
 console.log('\nOffboarding someone who left');
 {
-  const leaver = await signup(`leaver-${RUN}@e2e.local`, 'Departing Dev', 'DEV');
+  const leaver = await signup(`leaver-${RUN}@e2e.local`, 'Departing Dev', 'DEV', join);
 
   // Give them a task and some history worth preserving.
   const raised = await call(manager, '/api/tasks', {
@@ -1072,6 +1089,63 @@ console.log('\nScheduling meetings');
   ok('a cancelled meeting cannot be retried',
      (await call(lead, `/api/meetings/${meeting.id}`,
        { method: 'PATCH', body: JSON.stringify({ action: 'retry' }) })).status === 400);
+}
+
+console.log('\nOrganisations are walls');
+{
+  const other = await signup(`other-ceo-${RUN}@e2e.local`, 'Other Chief', 'MANAGER', { orgName: `Other Org ${RUN}` });
+  ok('founding an organisation makes you its CEO', other.user.role === 'CEO', other.user.role);
+  ok('and it is a different organisation from ours', other.user.org_id && other.user.org_id !== ceo.user.org_id);
+
+  const theirOrg = (await call(other, '/api/org')).body.org;
+  ok('the founder can read its invite code',
+     typeof theirOrg?.invite_code === 'string' && theirOrg.invite_code.length >= 8, JSON.stringify(theirOrg));
+  ok('a manager cannot read the invite code', (await call(manager, '/api/org')).body.org?.invite_code === undefined);
+  ok('a manager cannot rename the organisation',
+     (await call(manager, '/api/org', { method: 'PATCH', body: JSON.stringify({ name: 'Hijacked' }) })).status === 403);
+  const renamed = await call(other, '/api/org', { method: 'PATCH', body: JSON.stringify({ name: `Renamed ${RUN}` }) });
+  ok('the CEO can rename it', renamed.body.org?.name === `Renamed ${RUN}`, JSON.stringify(renamed.body));
+
+  ok('the other organisation sees none of our tasks',
+     !(await call(other, '/api/tasks')).body.tasks?.some((t) => t.id === task.id));
+  ok('nor can it open one by id', [403, 404].includes((await call(other, `/api/tasks/${task.id}`)).status));
+  ok('nor see our people', !(await call(other, '/api/users')).body.users?.some((u) => u.id === dev.user.id));
+  ok('nor message them',
+     (await call(other, '/api/conversations', { method: 'POST', body: JSON.stringify({ userId: dev.user.id }) })).status === 404);
+  ok('nor change their roles',
+     (await call(other, `/api/users/${dev.user.id}`, { method: 'PATCH', body: JSON.stringify({ role: 'MANAGER' }) })).status === 404);
+  ok('nor read their task sheet', (await call(other, `/api/users/${dev.user.id}/sheet`)).status === 404);
+  ok('nor see any of our meetings', (await call(other, '/api/meetings?scope=past')).body.meetings?.length === 0);
+
+  const theirs = await call(other, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `Other org task ${RUN}`, priority: 'LOW' }),
+  });
+  ok('the other organisation can raise its own work', theirs.status === 201, JSON.stringify(theirs.body).slice(0, 120));
+  ok('task numbers start at 1 in a new organisation', theirs.body.task?.seq === 1, String(theirs.body.task?.seq));
+  ok('our lead cannot open it', [403, 404].includes((await call(lead, `/api/tasks/${theirs.body.task?.id}`)).status));
+  ok('our CEO cannot open it either', [403, 404].includes((await call(ceo, `/api/tasks/${theirs.body.task?.id}`)).status));
+  ok('it never appears on our board', !(await call(ceo, '/api/tasks')).body.tasks?.some((t) => t.id === theirs.body.task?.id));
+
+  const joiner = await signup(`joiner-${RUN}@e2e.local`, 'Joiner', 'DEV', { inviteCode: theirOrg.invite_code });
+  ok('an invite code lands you in that organisation', joiner.user.org_id === other.user.org_id);
+  ok('in the role you chose', joiner.user.role === 'DEV', joiner.user.role);
+  ok('a lower-cased code works too', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `lower-${RUN}@e2e.local`, password: PW, name: 'Lower Case',
+                           role: 'DEV', inviteCode: theirOrg.invite_code.toLowerCase() }) })).status === 201);
+
+  const rotated = await call(other, '/api/org', { method: 'PATCH', body: JSON.stringify({ rotateInvite: true }) });
+  ok('the CEO can mint a new invite code',
+     rotated.body.org?.invite_code && rotated.body.org.invite_code !== theirOrg.invite_code);
+  ok('the old code stops working', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `late-${RUN}@e2e.local`, password: PW, name: 'Too Late',
+                           role: 'DEV', inviteCode: theirOrg.invite_code }) })).status === 403);
+
+  // tidy: the other organisation's task and the people who joined it
+  await call(other, `/api/tasks/${theirs.body.task?.id}`, { method: 'DELETE' });
+  const theirPeople = (await call(other, '/api/users')).body.users ?? [];
+  for (const u of theirPeople) if (u.id !== other.user.id) await call(other, `/api/users/${u.id}`, { method: 'DELETE' });
 }
 
 console.log('\nCleanup');

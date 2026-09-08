@@ -1,6 +1,6 @@
 import { currentUser } from '@/lib/auth';
 import { fail, ok } from '@/lib/api';
-import { getAvatar, setAvatar } from '@/lib/store';
+import { getAvatar, getUser, setAvatar } from '@/lib/store';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -13,6 +13,8 @@ export async function GET(_req: Request, { params }: Ctx) {
   if (!user) return fail('Not signed in', 401);
 
   const { id } = await params;
+  const target = await getUser(id);
+  if (!target || target.org_id !== user.org_id) return fail('No picture', 404);
   const avatar = await getAvatar(id);
   if (!avatar) return fail('No picture', 404);
 

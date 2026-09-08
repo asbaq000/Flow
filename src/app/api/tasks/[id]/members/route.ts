@@ -22,6 +22,6 @@ export async function GET(_req: Request, { params }: Ctx) {
   if (!task) return fail('Task not found', 404);
   if (!canView(user, task)) return fail('You do not have access to this task', 403);
 
-  const members = (await allUsers()).filter((u) => canView(u, task));
+  const members = (await allUsers(user.org_id)).filter((u) => canView(u, task));
   return ok({ members });
 }

@@ -13,11 +13,11 @@ export async function GET(req: Request) {
   const archived = url.searchParams.get('archived') === '1';
   const search = url.searchParams.get('q') ?? undefined;
 
-  const tasks = (await listTasks({ archived, topLevelOnly: true, search })).filter((t) =>
+  const tasks = (await listTasks({ orgId: user.org_id, archived, topLevelOnly: true, search })).filter((t) =>
     canView(user, t)
   );
 
-  return ok({ tasks, users: await allUsers(), tags: await allTags(), me: user });
+  return ok({ tasks, users: await allUsers(user.org_id), tags: await allTags(user.org_id), me: user });
 }
 
 interface CreateBody {
@@ -44,7 +44,7 @@ export async function POST(req: Request): Promise<NextResponse> {
    * there does a Lead hand it down to a Developer. Any assignee supplied by the
    * client is ignored on purpose.
    */
-  const routedTo = await pickRoutingLead(user.id);
+  const routedTo = await pickRoutingLead(user.org_id, user.id);
 
   const task = await createTask(
     user,

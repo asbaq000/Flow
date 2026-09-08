@@ -10,7 +10,7 @@ export default async function LoginPage() {
   if (user) redirect('/workspace');
 
   const row = await one<{ c: number }>('SELECT COUNT(*)::int AS c FROM users');
-  // Only used to open on the signup tab for a brand-new workspace; the CEO
-  // seat is claimed with a setup code, not by arriving first.
+  // Only used to open on the signup tab, in "start an organisation" mode, for
+  // a brand-new install. Founding an organisation is what makes someone CEO.
   return <AuthForm isEmptyWorkspace={(row?.c ?? 0) === 0} />;
 }

@@ -39,8 +39,17 @@ export const PRIORITIES: { id: Priority; label: string; color: string; weight: n
 export const TAG_COLORS = ['gray', 'brown', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'red'] as const;
 export type TagColor = (typeof TAG_COLORS)[number];
 
+export interface Organization {
+  id: string;
+  name: string;
+  /** Only ever sent to the CEO. */
+  invite_code?: string;
+  created_at: number;
+}
+
 export interface User {
   id: string;
+  org_id: string;
   email: string;
   name: string;
   role: Role;
@@ -49,7 +58,7 @@ export interface User {
   created_at: number;
 }
 
-export interface Tag { id: string; name: string; color: TagColor }
+export interface Tag { id: string; org_id?: string; name: string; color: TagColor }
 export interface TaskLink { id: string; task_id: string; url: string; label: string; position: number }
 
 export type ProgressKind = 'update' | 'submitted' | 'approved' | 'changes_requested';
@@ -72,6 +81,7 @@ export type MeetingStatus = 'scheduled' | 'failed' | 'cancelled';
 
 export interface Meeting {
   id: string;
+  org_id: string;
   title: string;
   agenda: string;
   organizer_id: string | null;
@@ -131,6 +141,7 @@ export type ConversationKind = 'direct' | 'task';
 
 export interface Conversation {
   id: string;
+  org_id: string;
   kind: ConversationKind;
   task_id: string | null;
   title: string;
@@ -178,6 +189,7 @@ export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 export interface Task {
   id: string;
+  org_id: string;
   seq: number;
   title: string;
   description: string;

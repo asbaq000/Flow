@@ -1,7 +1,8 @@
+import crypto from 'node:crypto';
 import { many, one, run, tx, nextTaskSeq } from './pg';
 import { newId } from './ids';
 import type {
-  ActivityItem, Attachment, Comment, Conversation, ConversationFull, Meeting, MeetingAttendee,
+  ActivityItem, Attachment, Comment, Conversation, ConversationFull, Meeting, MeetingAttendee, Organization,
   MeetingFull, MeetingStatus, Message, Notification, Priority,
   ProgressKind, ProgressUpdate, SheetEntry, Status, Tag, Task, TaskFull, TaskLink,
   TaskSheet, User, VoiceNote,
@@ -13,7 +14,7 @@ import { appUrl, sendMail } from './email';
 import { cancelMeetEvent, createMeetEvent, googleCalendarEnabled } from './googleCalendar';
 import { postToSlack, slackWants } from './slack';
 
-const USER_COLS = 'id, email, name, role, avatar_color, title, created_at';
+const USER_COLS = 'id, org_id, email, name, role, avatar_color, title, created_at';
 
 /**
  * Every hydrated task, comment, voice note and progress update needs its
@@ -53,8 +54,9 @@ export async function getUserByEmail(email: string): Promise<User | null> {
   return one<User>(`SELECT ${USER_COLS} FROM users WHERE email = ?`, [email.trim().toLowerCase()]);
 }
 
-export async function allUsers(): Promise<User[]> {
-  const users = [...(await userCache()).values()];
+/** Everyone in one organisation. The cache holds every install-wide user; this is the wall. */
+export async function allUsers(orgId: string): Promise<User[]> {
+  const users = [...(await userCache()).values()].filter((u) => u.org_id === orgId);
   const rank = { CEO: 0, MANAGER: 1, TEAM_LEAD: 2 } as Record<string, number>;
   return users.sort(
     (a, b) => (rank[a.role] ?? 3) - (rank[b.role] ?? 3) || a.name.localeCompare(b.name)
@@ -178,6 +180,8 @@ export async function getTask(id: string): Promise<TaskFull | null> {
 }
 
 export interface TaskQuery {
+  /** Required: no board is ever listed without saying whose it is. */
+  orgId: string;
   archived?: boolean;
   topLevelOnly?: boolean;
   assigneeId?: string;
@@ -185,9 +189,9 @@ export interface TaskQuery {
   search?: string;
 }
 
-export async function listTasks(q: TaskQuery = {}): Promise<TaskFull[]> {
-  const where: string[] = ['t.archived = ' + (q.archived ? 1 : 0)];
-  const params: unknown[] = [];
+export async function listTasks(q: TaskQuery): Promise<TaskFull[]> {
+  const where: string[] = ['t.org_id = ?', 't.archived = ' + (q.archived ? 1 : 0)];
+  const params: unknown[] = [q.orgId];
   if (q.topLevelOnly) where.push('t.parent_id IS NULL');
   if (q.status) {
     where.push('t.status = ?');
@@ -245,18 +249,18 @@ export async function createTask(
   const title = input.title.trim() || 'Untitled';
 
   const [seq, maxPos] = await Promise.all([
-    nextTaskSeq(),
-    one<{ p: number }>('SELECT COALESCE(MAX(position), 0) AS p FROM tasks'),
+    nextTaskSeq(actor.org_id),
+    one<{ p: number }>('SELECT COALESCE(MAX(position), 0) AS p FROM tasks WHERE org_id = ?', [actor.org_id]),
   ]);
 
   await run(
     `INSERT INTO tasks
-       (id, seq, title, description, status, priority, creator_id, assignee_id, parent_id,
+       (org_id, id, seq, title, description, status, priority, creator_id, assignee_id, parent_id,
         due_date, start_date, estimate, progress, position, archived, created_at, updated_at,
         submitted_at, completed_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,0,?,?,NULL,NULL)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,0,?,?,NULL,NULL)`,
     [
-      id, seq, title,
+      actor.org_id, id, seq, title,
       input.description ?? '[]',
       input.status ?? 'TRIAGE',
       input.priority ?? 'MEDIUM',
@@ -417,15 +421,15 @@ export async function splitTask(
 
     const now = Date.now();
     const id = newId('t_');
-    const seq = await nextTaskSeq();
+    const seq = await nextTaskSeq(parent.org_id);
     const title = piece.title.trim();
 
     await run(
-      `INSERT INTO tasks (id, seq, title, description, status, priority, creator_id, assignee_id,
+      `INSERT INTO tasks (org_id, id, seq, title, description, status, priority, creator_id, assignee_id,
                           parent_id, due_date, estimate, progress, position, archived, created_at, updated_at)
-       VALUES (?,?,?,'[]',?,?,?,?,?,?,?,0,?,0,?,?)`,
+       VALUES (?,?,?,?,'[]',?,?,?,?,?,?,?,0,?,0,?,?)`,
       [
-        id, seq, title,
+        parent.org_id, id, seq, title,
         piece.assigneeId ? 'TODO' : 'TRIAGE',
         parent.priority, actor.id, piece.assigneeId ?? null, parentId,
         parent.due_date, piece.estimate ?? null, basePos + (i + 1) * 1000, now, now,
@@ -482,16 +486,16 @@ export async function removeLink(id: string) {
   await run('DELETE FROM task_links WHERE id = ?', [id]);
 }
 
-export async function allTags(): Promise<Tag[]> {
-  return many<Tag>('SELECT * FROM tags ORDER BY name');
+export async function allTags(orgId: string): Promise<Tag[]> {
+  return many<Tag>('SELECT * FROM tags WHERE org_id = ? ORDER BY name', [orgId]);
 }
 
-export async function upsertTag(name: string, color: string): Promise<Tag> {
-  const existing = await one<Tag>('SELECT * FROM tags WHERE name = ?', [name]);
+export async function upsertTag(orgId: string, name: string, color: string): Promise<Tag> {
+  const existing = await one<Tag>('SELECT * FROM tags WHERE org_id = ? AND name = ?', [orgId, name]);
   if (existing) return existing;
   const id = newId('g_');
-  await run('INSERT INTO tags (id, name, color) VALUES (?,?,?)', [id, name, color]);
-  return { id, name, color: color as Tag['color'] };
+  await run('INSERT INTO tags (id, org_id, name, color) VALUES (?,?,?,?)', [id, orgId, name, color]);
+  return { id, org_id: orgId, name, color: color as Tag['color'] };
 }
 
 export async function setTaskTags(taskId: string, tagIds: string[]) {
@@ -557,6 +561,9 @@ export async function addComment(actor: User, taskId: string, body: string): Pro
     const userId = match[2];
     if (notified.has(userId)) continue;
     notified.add(userId);
+    // A pasted id from another organisation is just text, not a mention.
+    const mentioned = await getUser(userId);
+    if (!mentioned || mentioned.org_id !== actor.org_id) continue;
     await notify(userId, actor.id, 'mention', taskId, id, `${actor.name} mentioned you on "${title}"`);
     if (task) void emailMention(actor, userId, { id: taskId, seq: task.seq, title }, body);
   }
@@ -882,7 +889,8 @@ export async function submitForReview(
   await updateTask(actor, taskId, { status: 'SUBMITTED' });
 
   const reviewers = await many<{ id: string }>(
-    `SELECT id FROM users WHERE role IN ('TEAM_LEAD','CEO')`
+    `SELECT id FROM users WHERE role IN ('TEAM_LEAD','CEO') AND org_id = ?`,
+    [task.org_id]
   );
   for (const r of reviewers) {
     await notify(r.id, actor.id, 'review_requested', taskId, null,
@@ -998,7 +1006,7 @@ export async function deleteAttachment(id: string) {
 /* Conversations                                                       */
 /* ------------------------------------------------------------------ */
 
-const CONV_COLS = 'id, kind, task_id, title, closed_at, created_at, updated_at';
+const CONV_COLS = 'id, org_id, kind, task_id, title, closed_at, created_at, updated_at';
 
 async function hydrateConversations(rows: Conversation[], forUserId: string): Promise<ConversationFull[]> {
   if (!rows.length) return [];
@@ -1158,9 +1166,9 @@ export async function openDirectConversation(actor: User, otherId: string): Prom
   const id = newId('cv_');
   const now = Date.now();
   await run(
-    `INSERT INTO conversations (id, kind, task_id, title, closed_at, created_at, updated_at)
-     VALUES (?,'direct',NULL,'',NULL,?,?)`,
-    [id, now, now]
+    `INSERT INTO conversations (org_id, id, kind, task_id, title, closed_at, created_at, updated_at)
+     VALUES (?,?,'direct',NULL,'',NULL,?,?)`,
+    [actor.org_id, id, now, now]
   );
   await run(
     'INSERT INTO conversation_members (conversation_id, user_id, last_read_at) VALUES (?,?,?),(?,?,?)',
@@ -1200,9 +1208,9 @@ export async function syncTaskConversation(taskId: string): Promise<void> {
   if (!convId) {
     convId = newId('cv_');
     await run(
-      `INSERT INTO conversations (id, kind, task_id, title, closed_at, created_at, updated_at)
-       VALUES (?,'task',?,?,NULL,?,?)`,
-      [convId, taskId, `TSK-${task.seq} · ${task.title}`.slice(0, 200), now, now]
+      `INSERT INTO conversations (org_id, id, kind, task_id, title, closed_at, created_at, updated_at)
+       VALUES (?,?,'task',?,?,NULL,?,?)`,
+      [task.org_id, convId, taskId, `TSK-${task.seq} · ${task.title}`.slice(0, 200), now, now]
     );
     await run(
       `INSERT INTO messages (id, conversation_id, author_id, body, created_at) VALUES (?,?,NULL,?,?)`,
@@ -1271,8 +1279,10 @@ export async function getAvatar(userId: string): Promise<{ data: Buffer; mime: s
   return { data: row.avatar_data, mime: row.avatar_mime ?? 'image/png' };
 }
 
-export async function usersWithAvatars(): Promise<Set<string>> {
-  const rows = await many<{ id: string }>('SELECT id FROM users WHERE avatar_data IS NOT NULL');
+export async function usersWithAvatars(orgId: string): Promise<Set<string>> {
+  const rows = await many<{ id: string }>(
+    'SELECT id FROM users WHERE avatar_data IS NOT NULL AND org_id = ?', [orgId]
+  );
   return new Set(rows.map((r) => r.id));
 }
 
@@ -1311,10 +1321,55 @@ export async function listPushSubscriptions(userId: string): Promise<PushSub[]> 
 }
 
 /* ------------------------------------------------------------------ */
+/* Organisations                                                       */
+/* ------------------------------------------------------------------ */
+
+const ORG_COLS = 'id, name, invite_code, created_at';
+
+/** Short, unambiguous, typeable: no 0/O or 1/l, and grouped. */
+function mintInviteCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(8);
+  const raw = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+
+export async function createOrganization(name: string): Promise<Organization> {
+  const id = newId('org_');
+  const org: Organization = { id, name, invite_code: mintInviteCode(), created_at: Date.now() };
+  await run('INSERT INTO organizations (id, name, invite_code, created_at) VALUES (?,?,?,?)',
+    [org.id, org.name, org.invite_code, org.created_at]);
+  return org;
+}
+
+export async function getOrganization(id: string): Promise<Organization | null> {
+  return one<Organization>(`SELECT ${ORG_COLS} FROM organizations WHERE id = ?`, [id]);
+}
+
+export async function findOrganizationByInvite(code: string): Promise<Organization | null> {
+  return one<Organization>(
+    `SELECT ${ORG_COLS} FROM organizations WHERE upper(invite_code) = upper(?)`, [code.trim()]
+  );
+}
+
+/** The oldest organisation — the one an upgraded install's people were adopted into. */
+export async function firstOrganization(): Promise<Organization | null> {
+  return one<Organization>(`SELECT ${ORG_COLS} FROM organizations ORDER BY created_at ASC LIMIT 1`);
+}
+
+export async function renameOrganization(id: string, name: string) {
+  await run('UPDATE organizations SET name = ? WHERE id = ?', [name, id]);
+}
+
+export async function rotateInviteCode(id: string) {
+  await run('UPDATE organizations SET invite_code = ? WHERE id = ?', [mintInviteCode(), id]);
+}
+
+/* ------------------------------------------------------------------ */
 /* Meetings                                                            */
 /* ------------------------------------------------------------------ */
 
-const MEETING_COLS = `id, title, agenda, organizer_id, task_id, starts_at, duration_min,
+const MEETING_COLS = `id, org_id, title, agenda, organizer_id, task_id, starts_at, duration_min,
                       time_zone, join_url, calendar_event_id, status, sync_error,
                       minutes, minutes_author_id, minutes_updated_at,
                       created_at, updated_at`;
@@ -1323,7 +1378,7 @@ async function hydrateMeeting(row: Meeting): Promise<MeetingFull> {
   const [organizer, participants, task] = await Promise.all([
     getUser(row.organizer_id),
     many<MeetingAttendee>(
-      `SELECT u.id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at,
+      `SELECT u.id, u.org_id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at,
               mp.attended
        FROM users u JOIN meeting_participants mp ON mp.user_id = u.id
        WHERE mp.meeting_id = ? ORDER BY u.name`,
@@ -1347,11 +1402,12 @@ export async function getMeeting(id: string): Promise<MeetingFull | null> {
  * were actually invited to, matching how task visibility already works.
  */
 export async function listMeetings(opts: {
+  orgId: string;
   forUserId?: string | null;
   scope?: 'upcoming' | 'past';
-} = {}): Promise<MeetingFull[]> {
-  const params: unknown[] = [];
-  const where: string[] = [];
+}): Promise<MeetingFull[]> {
+  const params: unknown[] = [opts.orgId];
+  const where: string[] = ['org_id = ?'];
 
   if (opts.forUserId) {
     where.push(
@@ -1399,9 +1455,10 @@ export interface MeetingInput {
 export async function createMeeting(actor: User, input: MeetingInput): Promise<MeetingFull> {
   // The organiser is always in the room, whether or not they picked themselves.
   const ids = Array.from(new Set([...input.participantIds, actor.id]));
+  // Only people from the same organisation can be invited, whatever ids arrive.
   const people = await many<User>(
-    `SELECT ${USER_COLS} FROM users WHERE id IN (${ids.map(() => '?').join(',')})`,
-    ids
+    `SELECT ${USER_COLS} FROM users WHERE id IN (${ids.map(() => '?').join(',')}) AND org_id = ?`,
+    [...ids, actor.org_id]
   );
 
   let joinUrl: string | null = null;
@@ -1435,12 +1492,12 @@ export async function createMeeting(actor: User, input: MeetingInput): Promise<M
   const now = Date.now();
 
   await run(
-    `INSERT INTO meetings (id, title, agenda, organizer_id, task_id, starts_at, duration_min,
+    `INSERT INTO meetings (org_id, id, title, agenda, organizer_id, task_id, starts_at, duration_min,
                            time_zone, join_url, calendar_event_id, status, sync_error,
                            created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
-      id, input.title.trim().slice(0, 200), (input.agenda ?? '').trim().slice(0, 4000),
+      actor.org_id, id, input.title.trim().slice(0, 200), (input.agenda ?? '').trim().slice(0, 4000),
       actor.id, input.taskId ?? null, input.startsAt, input.durationMin, input.timeZone,
       joinUrl, eventId, status, syncError, now, now,
     ]
@@ -1714,7 +1771,8 @@ async function emailLeads(
   body: string
 ) {
   const leads = await many<{ id: string; email: string }>(
-    `SELECT id, email FROM users WHERE role IN ('TEAM_LEAD','CEO')`
+    `SELECT id, email FROM users WHERE role IN ('TEAM_LEAD','CEO') AND org_id = ?`,
+    [actor.org_id]
   );
   await Promise.all(
     leads
@@ -1842,9 +1900,9 @@ export async function removeUser(actor: User, targetId: string): Promise<Removal
   );
 
   const lead = await one<{ id: string }>(
-    `SELECT id FROM users WHERE role = 'TEAM_LEAD' AND id != ?
+    `SELECT id FROM users WHERE role = 'TEAM_LEAD' AND id != ? AND org_id = ?
      ORDER BY created_at ASC LIMIT 1`,
-    [targetId]
+    [targetId, actor.org_id]
   );
   const fallback = lead?.id ?? (actorCanHold(actor) ? actor.id : null);
 
@@ -1873,7 +1931,9 @@ export async function removeUser(actor: User, targetId: string): Promise<Removal
 /** A Lead or the CEO can hold triage; a Manager cannot. */
 const actorCanHold = (u: User) => u.role === 'TEAM_LEAD' || u.role === 'CEO';
 
-export async function countByRole(role: string): Promise<number> {
-  const row = await one<{ c: number }>('SELECT COUNT(*)::int AS c FROM users WHERE role = ?', [role]);
+export async function countByRole(role: string, orgId: string): Promise<number> {
+  const row = await one<{ c: number }>(
+    'SELECT COUNT(*)::int AS c FROM users WHERE role = ? AND org_id = ?', [role, orgId]
+  );
   return row?.c ?? 0;
 }

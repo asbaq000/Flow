@@ -4,6 +4,17 @@
 -- Timestamps are BIGINT milliseconds (Date.now()) rather than timestamptz,
 -- so the JavaScript side never has to think about timezones.
 
+-- An organisation is the wall between tenants. Every user belongs to one;
+-- every task, tag, meeting and conversation carries the id of the one it
+-- belongs to, and nothing is ever read across that line.
+CREATE TABLE IF NOT EXISTS organizations (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  -- Shown to the CEO, typed by whoever is joining. Rotatable.
+  invite_code TEXT NOT NULL UNIQUE,
+  created_at  BIGINT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id            TEXT PRIMARY KEY,
   email         TEXT NOT NULL UNIQUE,
@@ -72,7 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_links_task ON task_links(task_id);
 
 CREATE TABLE IF NOT EXISTS tags (
   id    TEXT PRIMARY KEY,
-  name  TEXT NOT NULL UNIQUE,
+  name  TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT 'gray'
 );
 
@@ -276,6 +287,46 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+
+-- Tenancy columns, added after the fact so an existing install upgrades in
+-- place. Everything that existed before organisations did is adopted into
+-- one default organisation, exactly once.
+ALTER TABLE users         ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+ALTER TABLE tasks         ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+ALTER TABLE tags          ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+ALTER TABLE meetings      ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+
+INSERT INTO organizations (id, name, invite_code, created_at)
+  SELECT 'org_default', 'My organization', upper(substr(md5(random()::text), 1, 8)),
+         (extract(epoch from now()) * 1000)::bigint
+  WHERE NOT EXISTS (SELECT 1 FROM organizations)
+    AND EXISTS (SELECT 1 FROM users WHERE org_id IS NULL);
+
+UPDATE users SET org_id = (SELECT id FROM organizations ORDER BY created_at LIMIT 1)
+  WHERE org_id IS NULL;
+UPDATE tasks SET org_id = (SELECT u.org_id FROM users u WHERE u.id = tasks.creator_id)
+  WHERE org_id IS NULL AND creator_id IS NOT NULL;
+UPDATE tasks SET org_id = (SELECT id FROM organizations ORDER BY created_at LIMIT 1)
+  WHERE org_id IS NULL;
+UPDATE tags SET org_id = (SELECT id FROM organizations ORDER BY created_at LIMIT 1)
+  WHERE org_id IS NULL;
+UPDATE meetings SET org_id = (SELECT u.org_id FROM users u WHERE u.id = meetings.organizer_id)
+  WHERE org_id IS NULL AND organizer_id IS NOT NULL;
+UPDATE meetings SET org_id = (SELECT id FROM organizations ORDER BY created_at LIMIT 1)
+  WHERE org_id IS NULL;
+UPDATE conversations SET org_id = (SELECT t.org_id FROM tasks t WHERE t.id = conversations.task_id)
+  WHERE org_id IS NULL AND task_id IS NOT NULL;
+UPDATE conversations SET org_id = (SELECT id FROM organizations ORDER BY created_at LIMIT 1)
+  WHERE org_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_users_org    ON users(org_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_org    ON tasks(org_id);
+CREATE INDEX IF NOT EXISTS idx_meetings_org ON meetings(org_id);
+CREATE INDEX IF NOT EXISTS idx_conv_org     ON conversations(org_id);
+-- A tag name is unique within an organisation, not across all of them.
+ALTER TABLE tags DROP CONSTRAINT IF EXISTS tags_name_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_org_name ON tags(org_id, name);
 
 CREATE TABLE IF NOT EXISTS counters (
   name  TEXT PRIMARY KEY,

@@ -16,7 +16,9 @@ export async function POST(req: Request) {
   const body = await readJson<{ userId?: string }>(req);
   if (!body.userId) return fail('Say who');
   if (body.userId === user.id) return fail('That is you');
-  if (!(await getUser(body.userId))) return fail('Person not found', 404);
+  const other = await getUser(body.userId);
+  // Someone from another organisation is not a person you can see, let alone message.
+  if (!other || other.org_id !== user.org_id) return fail('Person not found', 404);
 
   return ok({ conversation: await openDirectConversation(user, body.userId) }, 201);
 }

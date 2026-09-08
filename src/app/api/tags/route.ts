@@ -6,7 +6,7 @@ import { TAG_COLORS } from '@/lib/types';
 export async function GET() {
   const user = await currentUser();
   if (!user) return fail('Not signed in', 401);
-  return ok({ tags: await allTags() });
+  return ok({ tags: await allTags(user.org_id) });
 }
 
 export async function POST(req: Request) {
@@ -18,5 +18,5 @@ export async function POST(req: Request) {
   if (!clean) return fail('Tag needs a name');
 
   const safeColor = (TAG_COLORS as readonly string[]).includes(color) ? color : 'gray';
-  return ok({ tag: await upsertTag(clean, safeColor) }, 201);
+  return ok({ tag: await upsertTag(user.org_id, clean, safeColor) }, 201);
 }

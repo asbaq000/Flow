@@ -32,7 +32,9 @@ export async function POST(req: Request, { params }: Ctx) {
   for (const piece of valid) {
     if (!piece.assigneeId) continue;
     const target = await getUser(piece.assigneeId);
-    if (!target) return fail('One of the pieces names someone who is not in this workspace', 404);
+    if (!target || target.org_id !== user.org_id) {
+      return fail('One of the pieces names someone who is not in this workspace', 404);
+    }
     if (!isAssignableRole(target.role)) {
       return fail(`Pieces can only go to Developers. ${target.name} is not one.`, 400);
     }

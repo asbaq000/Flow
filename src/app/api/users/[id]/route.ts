@@ -15,7 +15,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
 
   const { id } = await params;
   const target = await getUser(id);
-  if (!target) return fail('User not found', 404);
+  if (!target || target.org_id !== user.org_id) return fail('User not found', 404);
 
   const { role, title } = await readJson<{ role?: Role; title?: string }>(req);
 
@@ -23,7 +23,9 @@ export async function PATCH(req: Request, { params }: Ctx) {
     if (!VALID_ROLES.includes(role)) return fail('Not a valid role');
     // Never let the last CEO demote themselves out of the workspace.
     if (target.role === 'CEO' && role !== 'CEO') {
-      const row = await one<{ c: number }>("SELECT COUNT(*)::int AS c FROM users WHERE role = 'CEO'");
+      const row = await one<{ c: number }>(
+        "SELECT COUNT(*)::int AS c FROM users WHERE role = 'CEO' AND org_id = ?", [user.org_id]
+      );
       if ((row?.c ?? 0) <= 1) return fail('The workspace needs at least one CEO');
     }
     await run('UPDATE users SET role = ? WHERE id = ?', [role, id]);
@@ -46,7 +48,7 @@ export async function DELETE(_req: Request, { params }: Ctx) {
 
   const { id } = await params;
   const target = await getUser(id);
-  if (!target) return fail('User not found', 404);
+  if (!target || target.org_id !== user.org_id) return fail('User not found', 404);
 
   if (!canRemoveUser(user, target)) {
     return fail(whyCannotRemove(user, target) ?? 'You cannot remove this person', 403);

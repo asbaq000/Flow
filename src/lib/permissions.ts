@@ -39,8 +39,13 @@ export function isParticipant(user: User, task: TaskFull): boolean {
   );
 }
 
-/** Leads and above see the whole board; everyone else sees only what touches them. */
+/**
+ * Leads and above see the whole board; everyone else sees only what touches
+ * them. Both stop at the organisation's edge — this is the one check every
+ * task route goes through, so it is where the tenancy wall is enforced.
+ */
 export function canView(user: User, task: TaskFull): boolean {
+  if (task.org_id !== user.org_id) return false;
   return isLead(user) || isParticipant(user, task);
 }
 
