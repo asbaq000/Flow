@@ -37,6 +37,16 @@ function transport(): Transporter | null {
       // 465 is implicit TLS; 587 upgrades with STARTTLS.
       secure: PORT === 465,
       auth: { user: USER, pass: PASS },
+      /*
+       * Fail fast rather than hang. This runs inside a serverless function
+       * with its own time limit; a connection that is never going to open
+       * should say so in seconds and let the retry above have its turn,
+       * not sit there until the whole request is killed and nobody learns
+       * anything.
+       */
+      connectionTimeout: 10_000,
+      greetingTimeout: 8_000,
+      socketTimeout: 20_000,
     });
   }
   return global.__flow_mailer__;
@@ -118,15 +128,39 @@ export async function sendMailDetailed(mail: Mail): Promise<MailOutcome> {
     console.info(`[email] skipped (SMTP not configured): "${mail.subject}" -> ${mail.to}`);
     return { ok: false, error: 'SMTP is not configured on this server' };
   }
-  try {
-    const { html, text } = render(mail);
-    await tx.sendMail({ from: FROM, to: mail.to, subject: mail.subject, html, text });
-    return { ok: true };
-  } catch (err) {
-    const raw = err instanceof Error ? err.message : String(err);
-    console.error('[email] send failed:', raw);
-    return { ok: false, error: explain(raw) };
+
+  const { html, text } = render(mail);
+  let last = '';
+
+  /*
+   * Two attempts, because the first failure is often not about this email at
+   * all: a name lookup that came back EBUSY or EAI_AGAIN is the machine's
+   * resolver having a moment, and the same send a second later goes through.
+   * A refusal — wrong password, rejected recipient — is not retried; it would
+   * fail identically and only delay telling somebody what to fix.
+   */
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await tx.sendMail({ from: FROM, to: mail.to, subject: mail.subject, html, text });
+      return { ok: true };
+    } catch (err) {
+      last = err instanceof Error ? err.message : String(err);
+      const code = (err as { code?: string }).code ?? '';
+      if (attempt === 2 || !isTransient(last, code)) break;
+      console.warn(`[email] transient failure (${code || 'unknown'}), retrying once:`, last);
+      await new Promise((r) => setTimeout(r, 800));
+    }
   }
+
+  console.error('[email] send failed:', last);
+  return { ok: false, error: explain(last) };
+}
+
+/** Worth trying again: the network blinked, rather than the server saying no. */
+function isTransient(message: string, code: string): boolean {
+  const m = (code + ' ' + message).toUpperCase();
+  return ['EBUSY', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ESOCKET', 'EPIPE', 'ENOTFOUND']
+    .some((c) => m.includes(c));
 }
 
 /** Turns an SMTP server's answer into the thing to actually go and do. */
@@ -141,7 +175,14 @@ function explain(raw: string): string {
   if (m.includes('etimedout') || m.includes('econnrefused') || m.includes('esocket') || m.includes('connection timeout')) {
     return `Could not reach ${process.env.SMTP_HOST ?? 'the mail server'} on port ${process.env.SMTP_PORT ?? '587'}. Check SMTP_HOST and SMTP_PORT (587 for Gmail). [${raw}]`;
   }
-  if (m.includes('enotfound') || m.includes('eai_again')) {
+  if (m.includes('ebusy') || m.includes('eai_again')) {
+    // Seen on Windows when the machine's own resolver is momentarily wedged —
+    // a VPN adapter, a security suite hooking DNS, or a network that just
+    // changed. It never reached the mail server, so nothing here is about
+    // the password.
+    return `The machine could not look up ${process.env.SMTP_HOST ?? 'the mail server'} — its DNS answered "busy", not the mail server refusing anything. It was already retried once. Try again; if it keeps happening, check a VPN or security suite intercepting DNS, and run "ipconfig /flushdns". [${raw}]`;
+  }
+  if (m.includes('enotfound')) {
     return `SMTP_HOST does not resolve — check it for a typo. [${raw}]`;
   }
   if (m.includes('self signed') || m.includes('certificate')) {
