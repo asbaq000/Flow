@@ -96,17 +96,56 @@ function render(mail: Mail): { html: string; text: string } {
 
 /** Fire-and-forget. Returns whether it actually went out. */
 export async function sendMail(mail: Mail): Promise<boolean> {
+  return (await sendMailDetailed(mail)).ok;
+}
+
+export interface MailOutcome {
+  ok: boolean;
+  /** Why it failed, in words a person can act on. Absent when it worked. */
+  error?: string;
+}
+
+/**
+ * The same send, but it says what went wrong.
+ *
+ * Used by the notification self-test, where "it failed" is a useless answer:
+ * an app password with the spaces left in and a revoked one both look
+ * identical from the outside, and both are one-line fixes once named.
+ */
+export async function sendMailDetailed(mail: Mail): Promise<MailOutcome> {
   const tx = transport();
   if (!tx) {
     console.info(`[email] skipped (SMTP not configured): "${mail.subject}" -> ${mail.to}`);
-    return false;
+    return { ok: false, error: 'SMTP is not configured on this server' };
   }
   try {
     const { html, text } = render(mail);
     await tx.sendMail({ from: FROM, to: mail.to, subject: mail.subject, html, text });
-    return true;
+    return { ok: true };
   } catch (err) {
-    console.error('[email] send failed:', err instanceof Error ? err.message : err);
-    return false;
+    const raw = err instanceof Error ? err.message : String(err);
+    console.error('[email] send failed:', raw);
+    return { ok: false, error: explain(raw) };
   }
+}
+
+/** Turns an SMTP server's answer into the thing to actually go and do. */
+function explain(raw: string): string {
+  const m = raw.toLowerCase();
+  if (m.includes('535') || m.includes('username and password not accepted') || m.includes('invalid login')) {
+    return `Gmail rejected the sign-in. Use a 16-character App Password with the spaces removed (not your account password), and check SMTP_USER matches the account it was made on. [${raw}]`;
+  }
+  if (m.includes('534') || m.includes('application-specific password')) {
+    return `Gmail wants an App Password, not the account password. Turn on 2-Step Verification, then create one. [${raw}]`;
+  }
+  if (m.includes('etimedout') || m.includes('econnrefused') || m.includes('esocket') || m.includes('connection timeout')) {
+    return `Could not reach ${process.env.SMTP_HOST ?? 'the mail server'} on port ${process.env.SMTP_PORT ?? '587'}. Check SMTP_HOST and SMTP_PORT (587 for Gmail). [${raw}]`;
+  }
+  if (m.includes('enotfound') || m.includes('eai_again')) {
+    return `SMTP_HOST does not resolve — check it for a typo. [${raw}]`;
+  }
+  if (m.includes('self signed') || m.includes('certificate')) {
+    return `The mail server's TLS certificate was refused. [${raw}]`;
+  }
+  return raw;
 }

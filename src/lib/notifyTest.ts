@@ -1,4 +1,4 @@
-import { appUrl, emailEnabled, sendMail } from './email';
+import { appUrl, emailEnabled, sendMailDetailed } from './email';
 import { pushEnabled, pushToUser } from './push';
 import { postToSlack, slackEnabled } from './slack';
 import { notify } from './store';
@@ -27,7 +27,7 @@ export async function testNotificationChannels(user: User): Promise<Notification
   }
 
   const email = emailEnabled
-    ? await sendMail({
+    ? await sendMailDetailed({
         to: user.email,
         subject: 'Flow test notification',
         heading: 'This channel works',
@@ -35,7 +35,7 @@ export async function testNotificationChannels(user: User): Promise<Notification
         action: { label: 'Open Flow', url },
         footer: 'You are receiving this because you sent yourself a test from Flow.',
       })
-    : false;
+    : { ok: false, error: 'SMTP is not configured on this server' };
 
   const push = pushEnabled
     ? await pushToUser(user.id, { title: 'Flow test notification', body: text, url, tag: 'test' })
@@ -45,7 +45,7 @@ export async function testNotificationChannels(user: User): Promise<Notification
 
   return {
     inApp: { ok: inApp },
-    email: { configured: emailEnabled, ok: email, to: user.email },
+    email: { configured: emailEnabled, ok: email.ok, error: email.error, to: user.email },
     push: { configured: pushEnabled, devices: push.devices, sent: push.sent, ok: push.sent > 0 },
     slack: { configured: slackEnabled, ok: slack },
   };

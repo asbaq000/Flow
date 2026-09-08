@@ -332,7 +332,18 @@ function NotificationTest() {
         <ul className="mt-2 space-y-1 text-[12.5px]">
           <li className="flex gap-1.5">{mark(result.inApp.ok)}<span>In-app: {result.inApp.ok ? 'the bell has it' : 'did not arrive'}</span></li>
           <li className="flex gap-1.5">{mark(result.email.ok)}<span>
-            Email to {result.email.to}: {!result.email.configured ? 'not set up on this install (SMTP)' : result.email.ok ? 'sent — check your inbox' : 'failed — the server could not send it'}
+            Email to {result.email.to}: {!result.email.configured
+              ? 'not set up on this install (SMTP)'
+              : result.email.ok
+                ? 'sent — check your inbox'
+                : 'failed'}
+            {!result.email.ok && result.email.error && (
+              // The mail server's own words. Nearly every failure here is a
+              // one-line fix, and only the reason says which line.
+              <span className="mt-1 block break-words rounded-md px-2 py-1.5 text-[11.5px] leading-snug" style={{ background: 'var(--well)', color: 'var(--text-secondary)' }}>
+                {result.email.error}
+              </span>
+            )}
           </span></li>
           <li className="flex gap-1.5">{mark(result.push.ok)}<span>
             Push: {!result.push.configured ? 'not set up on this install (VAPID keys)' : result.push.devices === 0 ? 'no device has push turned on yet — use the button above' : `${result.push.sent} of ${result.push.devices} ${result.push.devices === 1 ? 'device' : 'devices'} reached`}
