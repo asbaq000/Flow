@@ -273,6 +273,34 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, created_at);
 
+-- A message can be reworded or taken back. Deleting keeps the row (so the
+-- thread still reads in order) but empties it and drops any file with it.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at  BIGINT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
+
+-- Clearing or deleting a chat is per person: what one member wipes from their
+-- own view stays with everyone else, the way a phone clears a thread without
+-- reaching into anyone else's. cleared_at hides everything older; hidden_at
+-- drops the room from that member's list until somebody writes in it again.
+ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS cleared_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS hidden_at  BIGINT;
+
+-- Files sent in chat: pictures, documents, voice notes. The bytes live in the
+-- row like every other upload here, under the same per-file cap as task
+-- attachments; one file per message.
+CREATE TABLE IF NOT EXISTS message_files (
+  id          TEXT PRIMARY KEY,
+  message_id  TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL DEFAULT 'file' CHECK (kind IN ('file','image','voice')),
+  filename    TEXT NOT NULL,
+  mime        TEXT NOT NULL DEFAULT 'application/octet-stream',
+  byte_size   INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  data        BYTEA NOT NULL,
+  created_at  BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_message_files_msg ON message_files(message_id);
+
 -- Profile pictures, kept small and in the row like everything else.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;

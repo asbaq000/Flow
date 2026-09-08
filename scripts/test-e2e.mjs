@@ -678,6 +678,119 @@ console.log('\nMessaging');
 }
 
 /* ---------- profile ---------- */
+console.log('\nMessaging — editing, files, clearing');
+{
+  const dm = (await call(dev, '/api/conversations', { method: 'POST', body: JSON.stringify({ userId: otherDev.user.id }) })).body.conversation;
+  const first = await call(dev, `/api/conversations/${dm.id}/messages`, { method: 'POST', body: JSON.stringify({ body: `hello ${RUN}` }) });
+  const msg = first.body.message;
+  ok('a message starts unedited, undeleted and file-less',
+     msg?.edited_at === null && msg?.deleted_at === null && Array.isArray(msg?.files) && msg.files.length === 0, JSON.stringify(msg));
+
+  const edited = await call(dev, `/api/messages/${msg.id}`, { method: 'PATCH', body: JSON.stringify({ body: `hello again ${RUN}` }) });
+  ok('the author can edit it', edited.status === 200 && edited.body.message?.body === `hello again ${RUN}`, JSON.stringify(edited.body).slice(0, 120));
+  ok('and it is marked as edited', typeof edited.body.message?.edited_at === 'number');
+  ok('somebody else cannot edit it',
+     (await call(otherDev, `/api/messages/${msg.id}`, { method: 'PATCH', body: JSON.stringify({ body: 'hijack' }) })).status === 403);
+  ok('an empty edit is refused',
+     (await call(dev, `/api/messages/${msg.id}`, { method: 'PATCH', body: JSON.stringify({ body: '   ' }) })).status === 400);
+  ok('the edit is what the other side reads',
+     (await call(otherDev, `/api/conversations/${dm.id}`)).body.messages.find((m) => m.id === msg.id)?.body === `hello again ${RUN}`);
+
+  const upload = async (sess, name, type, bytes, extra = {}) => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type }), name);
+    form.append('filename', name);
+    for (const [k, v] of Object.entries(extra)) form.append(k, String(v));
+    const res = await fetch(`${BASE}/api/conversations/${dm.id}/files`, { method: 'POST', headers: { Cookie: sess.cookie }, body: form });
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : {} };
+  };
+
+  const doc = await upload(dev, 'notes.txt', 'text/plain', 'meeting notes', { body: 'the notes' });
+  ok('a document can be sent', doc.status === 201, JSON.stringify(doc.body).slice(0, 160));
+  ok('it arrives as a file', doc.body.message?.files?.[0]?.kind === 'file');
+  ok('with its caption as the text', doc.body.message?.body === 'the notes');
+  ok('and its size', doc.body.message?.files?.[0]?.byte_size === 'meeting notes'.length);
+  const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+  const pic = await upload(otherDev, 'shot.png', 'image/png', PNG);
+  ok('a picture is recognised as one', pic.body.message?.files?.[0]?.kind === 'image', JSON.stringify(pic.body).slice(0, 160));
+  ok('a picture with no caption still has a line for the room list', (pic.body.message?.body ?? '').length > 0);
+  const voice = await upload(dev, 'voice.webm', 'audio/webm', Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3]), { kind: 'voice', durationMs: 1234 });
+  ok('a voice note is a voice note', voice.body.message?.files?.[0]?.kind === 'voice', JSON.stringify(voice.body).slice(0, 160));
+  ok('and keeps its length', voice.body.message?.files?.[0]?.duration_ms === 1234);
+  ok('a "voice note" that is not audio is just a file',
+     (await upload(dev, 'fake.webm', 'text/plain', 'not audio', { kind: 'voice' })).body.message?.files?.[0]?.kind === 'file');
+  ok('an empty file is refused', (await upload(dev, 'empty.txt', 'text/plain', '')).status === 400);
+  ok('the file rides with the thread', (await call(otherDev, `/api/conversations/${dm.id}`)).body.messages.find((m) => m.id === doc.body.message.id)?.files?.length === 1);
+  const preview = (await call(otherDev, '/api/conversations')).body.conversations.find((c) => c.id === dm.id)?.last_message?.body ?? '';
+  ok('a file with no caption still reads as something in the room list',
+     preview.startsWith('\u{1F4CE}') && preview.includes('fake.webm'), preview);
+
+  const fileId = doc.body.message.files[0].id;
+  const dl = await fetch(`${BASE}/api/message-files/${fileId}`, { headers: { Cookie: otherDev.cookie } });
+  ok('the other member can download it', dl.status === 200, String(dl.status));
+  ok('with its contents intact', (await dl.text()) === 'meeting notes');
+  ok('a document is never rendered inline', dl.headers.get('content-disposition')?.startsWith('attachment') === true);
+  ok('and never content-sniffed', dl.headers.get('x-content-type-options') === 'nosniff');
+  const picDl = await fetch(`${BASE}/api/message-files/${pic.body.message.files[0].id}`, { headers: { Cookie: dev.cookie } });
+  ok('a picture is served as a picture',
+     picDl.headers.get('content-type') === 'image/png' && picDl.headers.get('content-disposition')?.startsWith('inline') === true);
+  ok('somebody outside the conversation cannot fetch it',
+     (await fetch(`${BASE}/api/message-files/${fileId}`, { headers: { Cookie: manager2.cookie } })).status === 403);
+  ok('nor somebody signed out', (await fetch(`${BASE}/api/message-files/${fileId}`)).status === 401);
+  ok('an outsider cannot send a file in', (await (async () => {
+    const form = new FormData();
+    form.append('file', new Blob(['x'], { type: 'text/plain' }), 'x.txt');
+    return fetch(`${BASE}/api/conversations/${dm.id}/files`, { method: 'POST', headers: { Cookie: manager2.cookie }, body: form });
+  })()).status === 403);
+
+  ok('somebody else cannot delete your message', (await call(otherDev, `/api/messages/${msg.id}`, { method: 'DELETE' })).status === 403);
+  ok('the author can delete it', (await call(dev, `/api/messages/${msg.id}`, { method: 'DELETE' })).status === 200);
+  const afterDelete = (await call(otherDev, `/api/conversations/${dm.id}`)).body.messages.find((m) => m.id === msg.id);
+  ok('it stays in the thread as deleted', Boolean(afterDelete?.deleted_at) && afterDelete.body === '', JSON.stringify(afterDelete));
+  ok('a deleted message cannot be edited',
+     (await call(dev, `/api/messages/${msg.id}`, { method: 'PATCH', body: JSON.stringify({ body: 'x' }) })).status === 400);
+  ok('deleting a file message drops the file',
+     (await call(dev, `/api/messages/${doc.body.message.id}`, { method: 'DELETE' })).status === 200 &&
+     (await fetch(`${BASE}/api/message-files/${fileId}`, { headers: { Cookie: dev.cookie } })).status === 404);
+  ok('a message that is not there is a 404', (await call(dev, '/api/messages/m_nope', { method: 'DELETE' })).status === 404);
+
+  ok('clearing wipes the thread for you',
+     (await call(dev, `/api/conversations/${dm.id}/clear`, { method: 'POST' })).status === 200 &&
+     (await call(dev, `/api/conversations/${dm.id}`)).body.messages.length === 0);
+  ok('but not for the other person', (await call(otherDev, `/api/conversations/${dm.id}`)).body.messages.length >= 3);
+  ok('the room preview follows suit',
+     (await call(dev, '/api/conversations')).body.conversations.find((c) => c.id === dm.id)?.last_message === null);
+  const later = await call(otherDev, `/api/conversations/${dm.id}/messages`, { method: 'POST', body: JSON.stringify({ body: 'after the clear' }) });
+  ok('new messages still come through',
+     (await call(dev, `/api/conversations/${dm.id}`)).body.messages.map((m) => m.id).join() === later.body.message.id);
+
+  ok('deleting the chat removes it from your list',
+     (await call(dev, `/api/conversations/${dm.id}`, { method: 'DELETE' })).status === 200 &&
+     !(await call(dev, '/api/conversations')).body.conversations.some((c) => c.id === dm.id));
+  ok('the other person still has it', (await call(otherDev, '/api/conversations')).body.conversations.some((c) => c.id === dm.id));
+  await call(otherDev, `/api/conversations/${dm.id}/messages`, { method: 'POST', body: JSON.stringify({ body: 'are you there?' }) });
+  ok('it comes back when they write again', (await call(dev, '/api/conversations')).body.conversations.some((c) => c.id === dm.id));
+  ok('with only what came after', (await call(dev, `/api/conversations/${dm.id}`)).body.messages.length === 1);
+  await call(dev, `/api/conversations/${dm.id}`, { method: 'DELETE' });
+  const reopened = await call(dev, '/api/conversations', { method: 'POST', body: JSON.stringify({ userId: otherDev.user.id }) });
+  ok('starting the chat again yourself brings it back too',
+     reopened.body.conversation?.id === dm.id && (await call(dev, '/api/conversations')).body.conversations.some((c) => c.id === dm.id));
+  ok('a non-member cannot clear it', (await call(manager2, `/api/conversations/${dm.id}/clear`, { method: 'POST' })).status === 403);
+  ok('a non-member cannot delete it', (await call(manager2, `/api/conversations/${dm.id}`, { method: 'DELETE' })).status === 403);
+}
+
+console.log('\nNotifications can be tested');
+{
+  const t = await call(dev, '/api/notifications/test', { method: 'POST' });
+  ok('a test round-trips', t.status === 200, JSON.stringify(t.body).slice(0, 160));
+  ok('the bell gets it', t.body.inApp?.ok === true);
+  ok('every other channel says whether it is set up',
+     ['email', 'push', 'slack'].every((k) => typeof t.body[k]?.configured === 'boolean'));
+  ok('it shows up in the list', (await call(dev, '/api/notifications')).body.notifications.some((n) => n.type === 'test'));
+  ok('signed out, no test', (await fetch(`${BASE}/api/notifications/test`, { method: 'POST' })).status === 401);
+}
+
 console.log('\nProfile');
 {
   // A throwaway account, because changing a password signs every session out.

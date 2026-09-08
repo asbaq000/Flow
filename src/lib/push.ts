@@ -32,14 +32,22 @@ export interface PushPayload {
   tag?: string;
 }
 
-/** Sends to every browser this person has enabled. Never throws. */
-export async function pushToUser(userId: string, payload: PushPayload): Promise<void> {
-  if (!pushEnabled) return;
+export interface PushOutcome {
+  /** Browsers this person has said yes in. */
+  devices: number;
+  /** How many of them accepted the push. */
+  sent: number;
+}
+
+/** Sends to every browser this person has enabled. Never throws; says how it went. */
+export async function pushToUser(userId: string, payload: PushPayload): Promise<PushOutcome> {
+  if (!pushEnabled) return { devices: 0, sent: 0 };
 
   const subs = await listPushSubscriptions(userId).catch(() => []);
-  if (!subs.length) return;
+  if (!subs.length) return { devices: 0, sent: 0 };
 
   const body = JSON.stringify({ ...payload, url: payload.url ?? `${appUrl}/workspace` });
+  let sent = 0;
 
   await Promise.all(subs.map(async (sub) => {
     try {
@@ -48,6 +56,7 @@ export async function pushToUser(userId: string, payload: PushPayload): Promise<
         body,
         { TTL: 60 * 60 * 6 }
       );
+      sent += 1;
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode;
       // 404/410: the browser unsubscribed or the device is gone. Forget it.
@@ -58,4 +67,6 @@ export async function pushToUser(userId: string, payload: PushPayload): Promise<
       }
     }
   }));
+
+  return { devices: subs.length, sent };
 }

@@ -151,13 +151,39 @@ export interface Conversation {
   updated_at: number;
 }
 
+export type MessageFileKind = 'file' | 'image' | 'voice';
+
+/** A file sent in chat. The bytes are fetched separately, by id. */
+export interface MessageFile {
+  id: string;
+  message_id: string;
+  kind: MessageFileKind;
+  filename: string;
+  mime: string;
+  byte_size: number;
+  duration_ms: number;
+  created_at: number;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
   author_id: string | null;
   body: string;
   created_at: number;
+  edited_at: number | null;
+  /** Set when taken back; the body is emptied and the bubble reads "deleted". */
+  deleted_at: number | null;
   author: User | null;
+  files: MessageFile[];
+}
+
+/** What the profile page shows after "send me a test". */
+export interface NotificationTestResult {
+  inApp: { ok: boolean };
+  email: { configured: boolean; ok: boolean; to: string };
+  push: { configured: boolean; devices: number; sent: number; ok: boolean };
+  slack: { configured: boolean; ok: boolean };
 }
 
 export interface ConversationFull extends Conversation {

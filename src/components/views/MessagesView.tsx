@@ -1,26 +1,39 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Hash, Loader2, Lock, MessageSquare, Plus, Send, Users2 } from 'lucide-react';
-import type { ConversationFull, Message, User } from '@/lib/types';
+import {
+  Check, Download, Eraser, FileText, Hash, Loader2, Lock, MessageSquare, MoreHorizontal, Paperclip,
+  Pencil, Plus, Send, Trash2, Users2, X,
+} from 'lucide-react';
+import type { ConversationFull, Message, MessageFile, TaskFull, User } from '@/lib/types';
+import { MAX_ATTACHMENT_BYTES } from '@/lib/types';
 import { api } from '@/lib/client';
 import { useLiveEvents } from '@/lib/useLiveEvents';
 import { escapeHtml } from '@/lib/sanitize';
+import { isLead } from '@/lib/permissions';
 import { Avatar, AvatarStack, Popover } from '../ui';
+import { VoiceRecorder, formatDuration } from '../VoiceNotes';
+import { fileSize } from '../Attachments';
 import { formatDateTime, timeAgo } from './shared';
+
+/** An in-progress "@na" or "#12" just before the caret. */
+type Hint = { kind: '@' | '#'; query: string; start: number };
 
 /**
  * Messages: one list of rooms on the left, the open one on the right.
  *
  * Task groups appear on their own the moment a task has more than two people
  * on it, and lock when the task is approved — the history stays, the typing
- * stops. Direct conversations are whoever you start one with.
+ * stops. Direct conversations are whoever you start one with. Anything can be
+ * said in a message: words, a link, a photo, a document, a voice note.
  */
 export default function MessagesView({
-  me, users, openTaskId, onOpenTask, onUnread,
+  me, users, tasks, openTaskId, onOpenTask, onUnread,
 }: {
   me: User;
   users: User[];
+  /** The board, so "#" can offer tasks by number or title. */
+  tasks: TaskFull[];
   /** Deep link from a notification: land in this task's group. */
   openTaskId?: string | null;
   onOpenTask: (id: string) => void;
@@ -32,8 +45,14 @@ export default function MessagesView({
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+  const [hint, setHint] = useState<Hint | null>(null);
+  const [cursor, setCursor] = useState(0);
+  const [editing, setEditing] = useState<{ id: string; body: string } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const refreshRooms = useCallback(async () => {
     try {
@@ -47,9 +66,15 @@ export default function MessagesView({
     }
   }, [onUnread]);
 
+  const loadThread = useCallback(async (id: string) => {
+    const { messages: list } = await api.conversations.open(id);
+    setMessages(list);
+  }, []);
+
   const openRoom = useCallback(async (id: string) => {
     setCurrent(id);
     setError('');
+    setEditing(null);
     try {
       const { conversation, messages: list } = await api.conversations.open(id);
       setMessages(list);
@@ -75,13 +100,15 @@ export default function MessagesView({
 
   useLiveEvents(
     useCallback((event) => {
+      const mine = event.actorId === me.id;
       if (event.type === 'message.added' || event.type === 'conversation.updated') {
         refreshRooms();
-        if (event.conversationId && event.conversationId === current && event.actorId !== me.id) {
-          api.conversations.open(current).then(({ messages: list }) => setMessages(list)).catch(() => {});
-        }
+        if (event.conversationId && event.conversationId === current && !mine) loadThread(current).catch(() => {});
+      } else if (event.type === 'message.updated' || event.type === 'message.deleted') {
+        refreshRooms();
+        if (event.conversationId && event.conversationId === current && !mine) loadThread(current).catch(() => {});
       }
-    }, [refreshRooms, current, me.id])
+    }, [refreshRooms, loadThread, current, me.id])
   );
 
   useEffect(() => {
@@ -89,6 +116,82 @@ export default function MessagesView({
   }, [messages.length, current]);
 
   const room = useMemo(() => rooms.find((r) => r.id === current) ?? null, [rooms, current]);
+
+  /* ---------- the composer's two pop-ups ---------- */
+
+  const allTasks = useMemo(() => tasks.flatMap((t) => [t, ...t.subtasks]), [tasks]);
+  // In a room, @ offers the people in it; a direct chat has exactly one other person.
+  const mentionPool = useMemo(
+    () => (room && room.members.length > 1 ? room.members : users).filter((u) => u.id !== me.id),
+    [room, users, me.id]
+  );
+  const userHits = useMemo(() => {
+    if (hint?.kind !== '@') return [];
+    const q = hint.query.trim().toLowerCase();
+    return mentionPool.filter((u) => u.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [hint, mentionPool]);
+  const taskHits = useMemo(() => {
+    if (hint?.kind !== '#') return [];
+    const q = hint.query.trim().toLowerCase();
+    const n = q.replace(/^tsk-?/, '');
+    return allTasks
+      .filter((t) => !n || String(t.seq).startsWith(n) || t.title.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [hint, allTasks]);
+  const hits = hint?.kind === '@' ? userHits.length : taskHits.length;
+
+  useEffect(() => setCursor(0), [hint?.query, hint?.kind]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setDraft(value);
+    autoGrow(e.target);
+    const upto = value.slice(0, e.target.selectionStart);
+    const at = upto.match(/(?:^|\s)@([\w\s]{0,20})$/);
+    const hash = upto.match(/(?:^|\s)#([\w-]{0,12})$/);
+    if (at) setHint({ kind: '@', query: at[1], start: upto.length - at[1].length - 1 });
+    else if (hash) setHint({ kind: '#', query: hash[1], start: upto.length - hash[1].length - 1 });
+    else setHint(null);
+  };
+
+  const insertAt = (text: string) => {
+    if (!hint) return;
+    const before = draft.slice(0, hint.start);
+    const after = draft.slice(hint.start + hint.query.length + 1);
+    setDraft(`${before}${text} ${after}`);
+    setHint(null);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      const pos = before.length + text.length + 1;
+      el.setSelectionRange(pos, pos);
+      autoGrow(el);
+    });
+  };
+
+  const pick = (i: number) => {
+    if (!hint) return;
+    if (hint.kind === '@') {
+      const u = userHits[i];
+      if (u) insertAt(`@[${u.name}](${u.id})`);
+    } else {
+      const t = taskHits[i];
+      if (t) insertAt(`#TSK-${t.seq}`);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (hint && hits > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setCursor((c) => (c + 1) % hits); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setCursor((c) => (c - 1 + hits) % hits); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(cursor); return; }
+      if (e.key === 'Escape') { setHint(null); return; }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  /* ---------- sending ---------- */
 
   const send = async () => {
     if (!room || !draft.trim() || sending) return;
@@ -98,11 +201,108 @@ export default function MessagesView({
       const { message } = await api.conversations.send(room.id, draft.trim());
       setMessages((prev) => [...prev, message]);
       setDraft('');
+      setHint(null);
+      if (inputRef.current) inputRef.current.style.height = 'auto';
       refreshRooms();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send that');
     } finally {
       setSending(false);
+    }
+  };
+
+  const sendFiles = async (list: FileList | null) => {
+    if (!room || !list?.length || uploading) return;
+    setUploading(true);
+    setError('');
+    try {
+      // The caption rides with the first file; the rest go on their own.
+      let caption = draft.trim();
+      for (const file of Array.from(list)) {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          setError(`${file.name} is over ${fileSize(MAX_ATTACHMENT_BYTES)} — keep files under that.`);
+          continue;
+        }
+        const { message } = await api.conversations.sendFile(room.id, file, { filename: file.name, body: caption });
+        caption = '';
+        setMessages((prev) => [...prev, message]);
+      }
+      setDraft('');
+      setHint(null);
+      if (inputRef.current) inputRef.current.style.height = 'auto';
+      refreshRooms();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send that file');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const sendVoice = async (blob: Blob, durationMs: number) => {
+    if (!room) return;
+    setError('');
+    const ext = blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : 'webm';
+    try {
+      const { message } = await api.conversations.sendFile(room.id, blob, {
+        filename: `voice-note.${ext}`, kind: 'voice', durationMs,
+      });
+      setMessages((prev) => [...prev, message]);
+      refreshRooms();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send the voice note');
+    }
+  };
+
+  /* ---------- editing, deleting, clearing ---------- */
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    const text = editing.body.trim();
+    if (!text) return;
+    try {
+      const { message } = await api.messages.edit(editing.id, text);
+      setMessages((prev) => prev.map((m) => (m.id === message.id ? message : m)));
+      setEditing(null);
+      refreshRooms();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save the edit');
+    }
+  };
+
+  const removeMessage = async (m: Message) => {
+    if (!window.confirm('Delete this message? It will show as deleted for everyone in the room.')) return;
+    try {
+      await api.messages.remove(m.id);
+      setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, body: '', deleted_at: Date.now(), files: [] } : x)));
+      refreshRooms();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete that');
+    }
+  };
+
+  const clearChat = async () => {
+    if (!room) return;
+    if (!window.confirm('Clear this chat for you? Everyone else keeps what was said.')) return;
+    try {
+      await api.conversations.clear(room.id);
+      setMessages([]);
+      refreshRooms();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not clear the chat');
+    }
+  };
+
+  const deleteChat = async () => {
+    if (!room) return;
+    if (!window.confirm('Delete this chat for you? It leaves your list and its history is cleared for you. It comes back if somebody writes here again.')) return;
+    try {
+      await api.conversations.remove(room.id);
+      setCurrent(null);
+      setMessages([]);
+      refreshRooms();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete the chat');
     }
   };
 
@@ -113,6 +313,7 @@ export default function MessagesView({
   };
 
   const others = users.filter((u) => u.id !== me.id);
+  const lead = isLead(me);
 
   return (
     <div className="flex h-full min-h-0">
@@ -165,7 +366,8 @@ export default function MessagesView({
               <MessageSquare size={30} className="mx-auto mb-3 text-[var(--text-tertiary)]" />
               <p className="text-[14px] font-medium">Pick a conversation</p>
               <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
-                Mention a task with <span className="font-mono">#12</span> and it links straight to it.
+                Type <span className="font-mono">#</span> to link a task and <span className="font-mono">@</span> to mention someone.
+                Photos, documents and voice notes go in too.
               </p>
             </div>
           </div>
@@ -201,15 +403,51 @@ export default function MessagesView({
                 </div>
               </div>
               <AvatarStack users={room.members} max={5} />
+              <Popover
+                width={220}
+                trigger={({ toggle }) => (
+                  <button onClick={toggle} className="btn btn-ghost px-1.5" title="Chat options">
+                    <MoreHorizontal size={15} />
+                  </button>
+                )}
+              >
+                {(close) => (
+                  <div>
+                    <div className="px-2 pb-1 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+                      Only for you
+                    </div>
+                    <button className="menu-item" onClick={() => { close(); clearChat(); }}>
+                      <Eraser size={14} /> Clear chat
+                    </button>
+                    <button className="menu-item text-red-600" onClick={() => { close(); deleteChat(); }}>
+                      <Trash2 size={14} /> Delete chat
+                    </button>
+                    <p className="px-2 pb-1.5 pt-1 text-[11px] leading-snug text-[var(--text-tertiary)]">
+                      Everyone else keeps their copy. A deleted chat returns when somebody writes in it.
+                    </p>
+                  </div>
+                )}
+              </Popover>
             </header>
 
             <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-4">
+              {messages.length === 0 && (
+                <p className="py-10 text-center text-[12.5px] text-[var(--text-tertiary)]">Nothing here yet.</p>
+              )}
               {messages.map((m, i) => (
                 <MessageRow
                   key={m.id}
                   message={m}
                   mine={m.author_id === me.id}
                   showHead={i === 0 || messages[i - 1].author_id !== m.author_id || m.created_at - messages[i - 1].created_at > 5 * 60_000}
+                  canEdit={!room.closed_at && m.author_id === me.id && !m.deleted_at}
+                  canDelete={!m.deleted_at && (m.author_id === me.id || lead)}
+                  editing={editing?.id === m.id ? editing.body : null}
+                  onStartEdit={() => setEditing({ id: m.id, body: m.body })}
+                  onEditChange={(body) => setEditing((e) => (e ? { ...e, body } : e))}
+                  onSaveEdit={saveEdit}
+                  onCancelEdit={() => setEditing(null)}
+                  onDelete={() => removeMessage(m)}
                   onOpenTask={onOpenTask}
                 />
               ))}
@@ -221,18 +459,66 @@ export default function MessagesView({
                 This group closed when the task was approved. It stays here as the record.
               </div>
             ) : (
-              <div className="border-t p-3">
-                <div className="flex items-end gap-2 rounded-2xl border px-3 py-2" style={{ background: 'var(--bg-input)' }}>
+              <div className="relative border-t p-3">
+                {hint && hits > 0 && (
+                  <div className="menu absolute bottom-full left-3 mb-1 w-[280px]">
+                    <div className="px-2 pb-1 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+                      {hint.kind === '@' ? 'Mention' : 'Link a task'}
+                    </div>
+                    {hint.kind === '@'
+                      ? userHits.map((u, i) => (
+                          <button
+                            key={u.id}
+                            data-active={i === cursor}
+                            className="menu-item"
+                            onMouseEnter={() => setCursor(i)}
+                            onMouseDown={(e) => { e.preventDefault(); pick(i); }}
+                          >
+                            <Avatar user={u} size="xs" />
+                            <span className="min-w-0 flex-1 truncate">{u.name}</span>
+                          </button>
+                        ))
+                      : taskHits.map((t, i) => (
+                          <button
+                            key={t.id}
+                            data-active={i === cursor}
+                            className="menu-item"
+                            onMouseEnter={() => setCursor(i)}
+                            onMouseDown={(e) => { e.preventDefault(); pick(i); }}
+                          >
+                            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">TSK-{t.seq}</span>
+                            <span className="min-w-0 flex-1 truncate">{t.title}</span>
+                          </button>
+                        ))}
+                  </div>
+                )}
+                <div className="flex items-end gap-1.5 rounded-2xl border px-2.5 py-2" style={{ background: 'var(--bg-input)' }}>
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploading}
+                    className="btn btn-ghost px-1.5 py-1"
+                    title="Send a photo or document"
+                  >
+                    {uploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />}
+                  </button>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => sendFiles(e.target.files)}
+                  />
                   <textarea
+                    ref={inputRef}
                     rows={1}
                     value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-                    }}
-                    placeholder={`Message ${room.kind === 'task' ? 'the group' : roomTitle(room, me)} — #12 links a task, @ mentions someone`}
+                    onChange={handleChange}
+                    onKeyDown={handleKeyDown}
+                    onBlur={() => setHint(null)}
+                    placeholder={`Message ${room.kind === 'task' ? 'the group' : roomTitle(room, me)} — # links a task, @ mentions someone`}
                     className="max-h-32 flex-1 resize-none bg-transparent py-1 text-[13.5px] outline-none placeholder:text-[var(--text-tertiary)]"
                   />
+                  <VoiceRecorder compact label="Send a voice note" onRecorded={sendVoice} />
                   <button onClick={send} disabled={!draft.trim() || sending} className="btn btn-primary px-2.5 py-1.5">
                     {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
                   </button>
@@ -247,6 +533,11 @@ export default function MessagesView({
   );
 }
 
+function autoGrow(el: HTMLTextAreaElement) {
+  el.style.height = 'auto';
+  el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+}
+
 function roomTitle(room: ConversationFull, me: User): string {
   if (room.kind === 'task') return room.title;
   const other = room.members.find((m) => m.id !== me.id);
@@ -255,8 +546,9 @@ function roomTitle(room: ConversationFull, me: User): string {
 
 function RoomRow({ room, me, active, onOpen }: { room: ConversationFull; me: User; active: boolean; onOpen: () => void }) {
   const other = room.members.find((m) => m.id !== me.id) ?? null;
-  const preview = room.last_message
-    ? `${room.last_message.author ? room.last_message.author.name.split(' ')[0] + ': ' : ''}${room.last_message.body}`
+  const last = room.last_message;
+  const preview = last
+    ? `${last.author ? last.author.name.split(' ')[0] + ': ' : ''}${last.deleted_at ? 'Message deleted' : last.body}`
     : 'No messages yet';
   return (
     <button
@@ -276,8 +568,8 @@ function RoomRow({ room, me, active, onOpen }: { room: ConversationFull; me: Use
           <span className={`min-w-0 flex-1 truncate text-[13px] ${room.unread ? 'font-semibold' : 'font-medium'}`}>
             {roomTitle(room, me)}
           </span>
-          {room.last_message && (
-            <span className="shrink-0 text-[10.5px] text-[var(--text-tertiary)]">{timeAgo(room.last_message.created_at)}</span>
+          {last && (
+            <span className="shrink-0 text-[10.5px] text-[var(--text-tertiary)]">{timeAgo(last.created_at)}</span>
           )}
         </span>
         <span className={`block truncate text-[12px] ${room.unread ? 'text-[var(--text)]' : 'text-[var(--text-tertiary)]'}`}>
@@ -293,8 +585,26 @@ function RoomRow({ room, me, active, onOpen }: { room: ConversationFull; me: Use
   );
 }
 
-function MessageRow({ message, mine, showHead, onOpenTask }: {
-  message: Message; mine: boolean; showHead: boolean; onOpenTask: (id: string) => void;
+/** File-only messages carry a stand-in line for the room list; the bubble shows the file instead. */
+const PLACEHOLDER_RE = /^(\u{1F3A4}|\u{1F5BC}|\u{1F4CE}) /u;
+
+function MessageRow({
+  message, mine, showHead, canEdit, canDelete, editing,
+  onStartEdit, onEditChange, onSaveEdit, onCancelEdit, onDelete, onOpenTask,
+}: {
+  message: Message;
+  mine: boolean;
+  showHead: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  /** The draft while this message is being edited, else null. */
+  editing: string | null;
+  onStartEdit: () => void;
+  onEditChange: (body: string) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onDelete: () => void;
+  onOpenTask: (id: string) => void;
 }) {
   // System lines (no author) sit centred and quiet.
   if (!message.author_id) {
@@ -302,41 +612,146 @@ function MessageRow({ message, mine, showHead, onOpenTask }: {
       <div className="my-3 text-center text-[11.5px] text-[var(--text-tertiary)]">{message.body}</div>
     );
   }
+
+  const deleted = Boolean(message.deleted_at);
+  const onlyFiles = message.files.length > 0 && PLACEHOLDER_RE.test(message.body);
+
   return (
-    <div className={`flex gap-2.5 ${showHead ? 'mt-3' : 'mt-0.5'} ${mine ? 'flex-row-reverse' : ''}`}>
+    <div className={`group flex gap-2.5 ${showHead ? 'mt-3' : 'mt-0.5'} ${mine ? 'flex-row-reverse' : ''}`}>
       <div className="w-7 shrink-0">{showHead && <Avatar user={message.author} size="sm" />}</div>
-      <div className={`max-w-[72%] ${mine ? 'items-end' : ''}`}>
+      <div className={`flex max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
         {showHead && (
           <div className={`mb-0.5 flex items-baseline gap-1.5 text-[11px] ${mine ? 'justify-end' : ''}`}>
             <span className="font-semibold text-[var(--text-secondary)]">{message.author?.name ?? 'Someone'}</span>
             <span className="text-[var(--text-tertiary)]" title={formatDateTime(message.created_at)}>{timeAgo(message.created_at)}</span>
           </div>
         )}
-        <div
-          className="whitespace-pre-wrap rounded-2xl px-3 py-1.5 text-[13.5px] leading-relaxed"
-          style={mine
-            ? { background: 'var(--accent)', color: 'var(--on-accent)', borderTopRightRadius: showHead ? 6 : undefined }
-            : { background: 'var(--bg-card)', border: '1px solid var(--border)', borderTopLeftRadius: showHead ? 6 : undefined }}
-          onClick={(e) => {
-            const t = (e.target as HTMLElement).closest('[data-task]') as HTMLElement | null;
-            if (t?.dataset.task) onOpenTask(t.dataset.task);
-          }}
-          dangerouslySetInnerHTML={{ __html: renderBody(message.body, mine) }}
-        />
+
+        {editing !== null ? (
+          <div className="w-[min(420px,100%)] rounded-2xl border p-2" style={{ background: 'var(--bg-card)' }}>
+            <textarea
+              autoFocus
+              value={editing}
+              onChange={(e) => onEditChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSaveEdit(); }
+                if (e.key === 'Escape') onCancelEdit();
+              }}
+              rows={2}
+              className="input w-full resize-y text-[13px]"
+            />
+            <div className="mt-1.5 flex items-center justify-end gap-1">
+              <span className="mr-auto text-[11px] text-[var(--text-tertiary)]">Enter saves · Esc cancels</span>
+              <button onClick={onCancelEdit} className="btn btn-ghost px-2 py-1 text-[12px]"><X size={12} /> Cancel</button>
+              <button onClick={onSaveEdit} disabled={!editing.trim()} className="btn btn-primary px-2 py-1 text-[12px]"><Check size={12} /> Save</button>
+            </div>
+          </div>
+        ) : (
+          <div className={`flex items-end gap-1 ${mine ? 'flex-row-reverse' : ''}`}>
+            <div className={`flex flex-col gap-1 ${mine ? 'items-end' : 'items-start'}`}>
+              {message.files.map((f) => <FileBubble key={f.id} file={f} />)}
+              {deleted ? (
+                <div className="rounded-2xl border border-dashed px-3 py-1.5 text-[12.5px] italic text-[var(--text-tertiary)]">
+                  This message was deleted
+                </div>
+              ) : !onlyFiles && message.body ? (
+                <div
+                  className="whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 text-[13.5px] leading-relaxed"
+                  style={mine
+                    ? { background: 'var(--accent)', color: 'var(--on-accent)', borderTopRightRadius: showHead ? 6 : undefined }
+                    : { background: 'var(--bg-card)', border: '1px solid var(--border)', borderTopLeftRadius: showHead ? 6 : undefined }}
+                  onClick={(e) => {
+                    const t = (e.target as HTMLElement).closest('[data-task]') as HTMLElement | null;
+                    if (t?.dataset.task) onOpenTask(t.dataset.task);
+                  }}
+                  dangerouslySetInnerHTML={{ __html: renderBody(message.body, mine) }}
+                />
+              ) : null}
+              {message.edited_at && !deleted && (
+                <span className="px-1 text-[10.5px] text-[var(--text-tertiary)]" title={formatDateTime(message.edited_at)}>edited</span>
+              )}
+            </div>
+
+            {(canEdit || canDelete) && (
+              <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                {canEdit && (
+                  <button onClick={onStartEdit} className="btn btn-ghost px-1 py-1" title="Edit">
+                    <Pencil size={12} />
+                  </button>
+                )}
+                {canDelete && (
+                  <button onClick={onDelete} className="btn btn-ghost px-1 py-1 text-red-600" title="Delete">
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
+function FileBubble({ file }: { file: MessageFile }) {
+  const url = api.conversations.fileUrl(file.id);
+  if (file.kind === 'image') {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" className="block max-w-[320px] overflow-hidden rounded-2xl border" title={file.filename}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={file.filename} loading="lazy" className="block max-h-72 w-auto max-w-full" />
+      </a>
+    );
+  }
+  if (file.kind === 'voice') {
+    return (
+      <div className="flex items-center gap-2 rounded-2xl border px-2.5 py-1.5" style={{ background: 'var(--bg-card)' }}>
+        <audio controls preload="none" src={url} className="h-8 max-w-[240px]" />
+        {file.duration_ms > 0 && (
+          <span className="font-mono text-[11px] text-[var(--text-tertiary)]">{formatDuration(file.duration_ms)}</span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <a
+      href={url}
+      download={file.filename}
+      className="flex max-w-[320px] items-center gap-2.5 rounded-2xl border px-3 py-2 transition-colors hover:bg-[var(--bg-hover)]"
+      style={{ background: 'var(--bg-card)' }}
+    >
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl" style={{ background: 'var(--well)', color: 'var(--text-secondary)' }}>
+        <FileText size={16} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium">{file.filename}</span>
+        <span className="block text-[11px] text-[var(--text-tertiary)]">{fileSize(file.byte_size)}</span>
+      </span>
+      <Download size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+    </a>
+  );
+}
+
+/** Where a link starts and, more carefully, where it stops: not on the full stop that ends the sentence. */
+const URL_RE = /((?:https?:\/\/|www\.)[^\s<]*[^\s<.,;:!?)\]'"])/gi;
+
 /**
- * Escapes, then lights up two things: @mentions, and task references written
- * as #12 or #TSK-12. The task id is not in the text, so the click resolves
- * it by ticket number through the board the workspace already holds.
+ * Lights up three things in a message: links, @mentions, and task references
+ * written as #12 or #TSK-12. Each piece is escaped on its own — the URL is
+ * split out of the raw text first so an escaped quote can never leak into
+ * an href. The task id is not in the text, so the click resolves it by ticket
+ * number through the board the workspace already holds.
  */
 function renderBody(body: string, mine: boolean): string {
   const linkStyle = mine ? 'text-decoration:underline;font-weight:600' : 'color:var(--accent);font-weight:600';
-  return escapeHtml(body)
-    .replace(/@\[([^\]]+)\]\(([^)]+)\)/g, (_m, name: string) => `<span class="mention">@${name}</span>`)
-    .replace(/#(?:TSK-)?(\d{1,6})\b/gi, (_m, n: string) =>
-      `<button type="button" data-seq="${n}" data-task="seq:${n}" style="${linkStyle}">#TSK-${n}</button>`);
+  return body.split(URL_RE).map((part, i) => {
+    if (i % 2 === 1) {
+      const href = /^www\./i.test(part) ? `https://${part}` : part;
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" style="${linkStyle};text-decoration:underline">${escapeHtml(part)}</a>`;
+    }
+    return escapeHtml(part)
+      .replace(/@\[([^\]]+)\]\(([^)]+)\)/g, (_m, name: string) => `<span class="mention">@${name}</span>`)
+      .replace(/#(?:TSK-)?(\d{1,6})\b/gi, (_m, n: string) =>
+        `<button type="button" data-seq="${n}" data-task="seq:${n}" style="${linkStyle}">#TSK-${n}</button>`);
+  }).join('');
 }

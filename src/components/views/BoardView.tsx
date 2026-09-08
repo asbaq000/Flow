@@ -177,6 +177,11 @@ export default function BoardView({ tasks, users, me, groupBy, sceneKey, onOpen,
     if (groupBy === 'status') {
       if (task.status === targetColumn.id) return;
       if (!canChangeStatus(me, task)) return;
+      // Done is a decision, so undoing it by a slip of the mouse should not be.
+      if (task.status === 'DONE') {
+        const label = STATUSES.find((st) => st.id === targetColumn.id)?.label ?? 'open work';
+        if (!window.confirm(`TSK-${task.seq} is done. Reopen it as "${label}"?`)) return;
+      }
       onUpdate(task.id, { status: targetColumn.id as Status });
       settle(task.id);
     } else if (groupBy === 'priority') {

@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
+import { isLead } from './permissions';
 import { many, one, run, tx, nextTaskSeq } from './pg';
 import { newId } from './ids';
 import type {
-  ActivityItem, Attachment, Comment, Conversation, ConversationFull, Meeting, MeetingAttendee, Organization,
+  ActivityItem, Attachment, Comment, Conversation, ConversationFull, Meeting, MeetingAttendee, MessageFile,
+  MessageFileKind, Organization,
   MeetingFull, MeetingStatus, Message, Notification, Priority,
   ProgressKind, ProgressUpdate, SheetEntry, Status, Tag, Task, TaskFull, TaskLink,
   TaskSheet, User, VoiceNote,
@@ -602,7 +604,9 @@ export async function setCommentResolved(id: string, resolved: boolean) {
 
 export async function notify(
   userId: string, actorId: string | null, type: string,
-  taskId: string | null, commentId: string | null, message: string
+  taskId: string | null, commentId: string | null, message: string,
+  /** quiet: the in-app row only — the caller is driving the other channels itself. */
+  opts: { quiet?: boolean } = {}
 ) {
   if (userId === actorId) return;
   await run(
@@ -611,6 +615,7 @@ export async function notify(
     [newId('n_'), userId, actorId, type, taskId, commentId, message, Date.now()]
   );
   publish({ type: 'notification', taskId, userId, actorId });
+  if (opts.quiet) return;
 
   /*
    * The bell only helps someone who is looking at Flow. Everything else goes
@@ -635,6 +640,7 @@ const PUSH_TITLES: Record<string, string> = {
   approved: 'Approved',
   changes_requested: 'Changes requested',
   meeting: 'Meeting',
+  test: 'Test notification',
 };
 
 export async function listNotifications(userId: string, limit = 60): Promise<Notification[]> {
@@ -1017,12 +1023,16 @@ async function hydrateConversations(rows: Conversation[], forUserId: string): Pr
       'SELECT conversation_id, user_id FROM conversation_members WHERE conversation_id = ANY(?)',
       [ids]
     ),
-    // The newest message per conversation, in one query rather than one each.
-    many<Message>(
-      `SELECT DISTINCT ON (conversation_id) id, conversation_id, author_id, body, created_at
-       FROM messages WHERE conversation_id = ANY(?)
-       ORDER BY conversation_id, created_at DESC`,
-      [ids]
+    // The newest message per conversation, in one query rather than one each —
+    // and only what this person has not cleared from their own view.
+    many<Omit<Message, 'author' | 'files'>>(
+      `SELECT DISTINCT ON (m.conversation_id)
+              m.id, m.conversation_id, m.author_id, m.body, m.created_at, m.edited_at, m.deleted_at
+       FROM messages m JOIN conversation_members cm
+         ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
+       WHERE m.conversation_id = ANY(?) AND m.created_at > cm.cleared_at
+       ORDER BY m.conversation_id, m.created_at DESC`,
+      [forUserId, ids]
     ),
     many<{ conversation_id: string; last_read_at: number }>(
       'SELECT conversation_id, last_read_at FROM conversation_members WHERE conversation_id = ANY(?) AND user_id = ?',
@@ -1040,7 +1050,7 @@ async function hydrateConversations(rows: Conversation[], forUserId: string): Pr
     `SELECT m.conversation_id, COUNT(*)::int AS c
      FROM messages m JOIN conversation_members cm
        ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
-     WHERE m.conversation_id = ANY(?) AND m.created_at > cm.last_read_at
+     WHERE m.conversation_id = ANY(?) AND m.created_at > cm.last_read_at AND m.created_at > cm.cleared_at
        -- System lines ("group opened", "group closed") are context, not
        -- something somebody said to you, so they never light the badge.
        AND m.author_id IS NOT NULL AND m.author_id <> ?
@@ -1062,7 +1072,7 @@ async function hydrateConversations(rows: Conversation[], forUserId: string): Pr
       members: (membersBy.get(c.id) ?? [])
         .map((m) => users.get(m.user_id))
         .filter(Boolean) as User[],
-      last_message: last ? { ...last, author: users.get(last.author_id ?? '') ?? null } : null,
+      last_message: last ? { ...last, author: users.get(last.author_id ?? '') ?? null, files: [] } : null,
       unread: unreadBy.get(c.id) ?? 0,
       task_seq: task?.seq ?? null,
       task_status: task?.status ?? null,
@@ -1074,7 +1084,9 @@ export async function listConversations(userId: string): Promise<ConversationFul
   const rows = await many<Conversation>(
     `SELECT ${CONV_COLS.split(', ').map((c) => 'c.' + c).join(', ')}
      FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id
-     WHERE cm.user_id = ? ORDER BY c.updated_at DESC`,
+     WHERE cm.user_id = ?
+       AND (cm.hidden_at IS NULL OR c.updated_at > cm.hidden_at)
+     ORDER BY c.updated_at DESC`,
     [userId]
   );
   return hydrateConversations(rows, userId);
@@ -1093,14 +1105,134 @@ export async function isConversationMember(id: string, userId: string): Promise<
   ));
 }
 
-export async function listMessages(conversationId: string, limit = 200): Promise<Message[]> {
-  const rows = await many<Message>(
-    `SELECT id, conversation_id, author_id, body, created_at FROM messages
-     WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?`,
-    [conversationId, limit]
+/** The thread as this person sees it: nothing from before they cleared it. */
+export async function listMessages(conversationId: string, forUserId: string, limit = 200): Promise<Message[]> {
+  const rows = await many<Omit<Message, 'author' | 'files'>>(
+    `SELECT id, conversation_id, author_id, body, created_at, edited_at, deleted_at FROM messages
+     WHERE conversation_id = ?
+       AND created_at > COALESCE(
+         (SELECT cleared_at FROM conversation_members WHERE conversation_id = ? AND user_id = ?), 0)
+     ORDER BY created_at DESC LIMIT ?`,
+    [conversationId, conversationId, forUserId, limit]
   );
-  const users = await userCache();
-  return rows.reverse().map((m) => ({ ...m, author: users.get(m.author_id ?? '') ?? null }));
+  const [users, filesBy] = await Promise.all([userCache(), filesForMessages(rows.map((m) => m.id))]);
+  return rows.reverse().map((m) => ({
+    ...m,
+    author: users.get(m.author_id ?? '') ?? null,
+    files: filesBy.get(m.id) ?? [],
+  }));
+}
+
+const FILE_COLS = 'id, message_id, kind, filename, mime, byte_size, duration_ms, created_at';
+
+async function filesForMessages(messageIds: string[]): Promise<Map<string, MessageFile[]>> {
+  if (!messageIds.length) return new Map();
+  const rows = await many<MessageFile>(
+    `SELECT ${FILE_COLS} FROM message_files WHERE message_id = ANY(?) ORDER BY created_at`,
+    [messageIds]
+  );
+  return groupBy(rows, (f) => f.message_id);
+}
+
+export async function getMessageFile(
+  id: string
+): Promise<(MessageFile & { data: Buffer; conversation_id: string }) | null> {
+  return one(
+    `SELECT f.id, f.message_id, f.kind, f.filename, f.mime, f.byte_size, f.duration_ms, f.created_at,
+            f.data, m.conversation_id
+     FROM message_files f JOIN messages m ON m.id = f.message_id WHERE f.id = ?`,
+    [id]
+  );
+}
+
+/** Wipes the thread for one person. Everyone else's copy is untouched. */
+export async function clearConversation(conversationId: string, userId: string) {
+  const now = Date.now();
+  await run(
+    'UPDATE conversation_members SET cleared_at = ?, last_read_at = ? WHERE conversation_id = ? AND user_id = ?',
+    [now, now, conversationId, userId]
+  );
+}
+
+/**
+ * "Delete chat", for one person: cleared, and gone from their list until the
+ * room's updated_at moves past this moment — which is to say, until somebody
+ * writes in it again.
+ */
+export async function hideConversation(conversationId: string, userId: string) {
+  const now = Date.now();
+  await run(
+    `UPDATE conversation_members SET cleared_at = ?, hidden_at = ?, last_read_at = ?
+     WHERE conversation_id = ? AND user_id = ?`,
+    [now, now, now, conversationId, userId]
+  );
+}
+
+export interface MessageFileInput {
+  kind: MessageFileKind;
+  filename: string;
+  mime: string;
+  data: Buffer;
+  durationMs?: number;
+}
+
+/** The line a file-only message carries, so the room list and the alert say something. */
+function placeholderFor(file: MessageFileInput): string {
+  if (file.kind === 'voice') return '\u{1F3A4} Voice note';
+  if (file.kind === 'image') return '\u{1F5BC} Photo';
+  return `\u{1F4CE} ${file.filename}`;
+}
+
+type MessageResult = { ok: true; message: Message } | { ok: false; error: string; status: number };
+
+/** Rewording your own message, while the room is still open. */
+export async function editMessage(actor: User, id: string, body: string): Promise<MessageResult> {
+  const row = await one<{ id: string; conversation_id: string; author_id: string | null; deleted_at: number | null; created_at: number }>(
+    'SELECT id, conversation_id, author_id, deleted_at, created_at FROM messages WHERE id = ?', [id]
+  );
+  if (!row) return { ok: false, error: 'Message not found', status: 404 };
+  if (row.author_id !== actor.id) return { ok: false, error: 'You can only edit your own messages', status: 403 };
+  if (row.deleted_at) return { ok: false, error: 'That message was deleted', status: 400 };
+  const conv = await one<{ closed_at: number | null }>('SELECT closed_at FROM conversations WHERE id = ?', [row.conversation_id]);
+  if (conv?.closed_at) return { ok: false, error: 'This group closed when the task was approved', status: 400 };
+
+  const now = Date.now();
+  const text = body.trim().slice(0, 8000);
+  await run('UPDATE messages SET body = ?, edited_at = ? WHERE id = ?', [text, now, id]);
+  publish({ type: 'message.updated', taskId: null, actorId: actor.id, conversationId: row.conversation_id });
+
+  const files = (await filesForMessages([id])).get(id) ?? [];
+  return {
+    ok: true,
+    message: {
+      id, conversation_id: row.conversation_id, author_id: actor.id, body: text,
+      created_at: row.created_at, edited_at: now, deleted_at: null, author: actor, files,
+    },
+  };
+}
+
+/**
+ * Taking a message back. The row stays so the thread keeps its shape, but
+ * the words go and so does any file — bytes nobody can see should not sit in
+ * the database. Your own, or anyone's if you are a Lead in that room.
+ */
+export async function deleteMessage(actor: User, id: string): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  const row = await one<{ id: string; conversation_id: string; author_id: string | null; deleted_at: number | null }>(
+    'SELECT id, conversation_id, author_id, deleted_at FROM messages WHERE id = ?', [id]
+  );
+  if (!row) return { ok: false, error: 'Message not found', status: 404 };
+  if (!(await isConversationMember(row.conversation_id, actor.id))) {
+    return { ok: false, error: 'You are not in this conversation', status: 403 };
+  }
+  if (row.author_id !== actor.id && !isLead(actor)) {
+    return { ok: false, error: 'You can only delete your own messages', status: 403 };
+  }
+  if (row.deleted_at) return { ok: true };
+
+  await run("UPDATE messages SET body = '', deleted_at = ?, edited_at = NULL WHERE id = ?", [Date.now(), id]);
+  await run('DELETE FROM message_files WHERE message_id = ?', [id]);
+  publish({ type: 'message.deleted', taskId: null, actorId: actor.id, conversationId: row.conversation_id });
+  return { ok: true };
 }
 
 export async function markConversationRead(conversationId: string, userId: string) {
@@ -1116,15 +1248,32 @@ export async function markConversationRead(conversationId: string, userId: strin
  * group does not mean a hundred identical alerts, and a mention still cuts
  * through.
  */
-export async function sendMessage(actor: User, conversationId: string, body: string): Promise<Message> {
+export async function sendMessage(
+  actor: User, conversationId: string, body: string, file?: MessageFileInput
+): Promise<Message> {
   const id = newId('m_');
   const now = Date.now();
-  const text = body.trim().slice(0, 8000);
+  // A file with no caption still needs a line: the room list and the alert
+  // show the body, and a blank one says nothing about what arrived.
+  const text = (body.trim() || (file ? placeholderFor(file) : '')).slice(0, 8000);
 
   await run(
     'INSERT INTO messages (id, conversation_id, author_id, body, created_at) VALUES (?,?,?,?,?)',
     [id, conversationId, actor.id, text, now]
   );
+  const files: MessageFile[] = [];
+  if (file) {
+    const meta: MessageFile = {
+      id: newId('mf_'), message_id: id, kind: file.kind, filename: file.filename, mime: file.mime,
+      byte_size: file.data.length, duration_ms: file.durationMs ?? 0, created_at: now,
+    };
+    await run(
+      `INSERT INTO message_files (id, message_id, kind, filename, mime, byte_size, duration_ms, data, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [meta.id, id, meta.kind, meta.filename, meta.mime, meta.byte_size, meta.duration_ms, file.data, now]
+    );
+    files.push(meta);
+  }
   await run('UPDATE conversations SET updated_at = ? WHERE id = ?', [now, conversationId]);
   await markConversationRead(conversationId, actor.id);
 
@@ -1148,7 +1297,10 @@ export async function sendMessage(actor: User, conversationId: string, body: str
   }
 
   publish({ type: 'message.added', taskId: conv?.task_id ?? null, actorId: actor.id, conversationId });
-  return { id, conversation_id: conversationId, author_id: actor.id, body: text, created_at: now, author: actor };
+  return {
+    id, conversation_id: conversationId, author_id: actor.id, body: text, created_at: now,
+    edited_at: null, deleted_at: null, author: actor, files,
+  };
 }
 
 /** Finds the one-to-one conversation with someone, opening it if there is none. */
@@ -1161,7 +1313,12 @@ export async function openDirectConversation(actor: User, otherId: string): Prom
        AND (SELECT COUNT(*) FROM conversation_members WHERE conversation_id = c.id) = 2`,
     [actor.id, otherId]
   );
-  if (existing) return (await getConversation(existing.id, actor.id))!;
+  if (existing) {
+    // Starting it again after "delete chat" is the same as somebody writing in it.
+    await run('UPDATE conversation_members SET hidden_at = NULL WHERE conversation_id = ? AND user_id = ?',
+      [existing.id, actor.id]);
+    return (await getConversation(existing.id, actor.id))!;
+  }
 
   const id = newId('cv_');
   const now = Date.now();

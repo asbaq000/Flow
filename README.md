@@ -140,6 +140,16 @@ Recording needs microphone permission and a `MediaRecorder`-capable browser (Chr
 
 Threaded comments with `@mention` autocomplete — restricted to **people actually on the task** (whoever raised it, whoever it is assigned to, anyone holding a split piece, and the Leads/CEO overseeing it). Mentioning someone who cannot open the task would just send them a notification to a 403, so the list comes from the same visibility rule the task itself uses. Plus a mic button to reply by voice — a recording on its own is a valid comment. Mentioning someone notifies them; so does being assigned, or having your task moved. Comments can be resolved and hidden. The bell shows an unread count.
 
+### Messages
+
+A conversation list on the left, the open one on the right. **Task groups open on their own** the moment a task has more than two people on it — whoever raised it, whoever holds it, everyone holding a piece of a split — and lock when the task is approved: the record stays, the typing stops. Anyone can also start a direct conversation with anyone else in the organisation.
+
+In the composer, `@` opens a picker of the people in that room and `#` opens one of your tasks by number or title; either one is inserted for you, and the `#TSK-12` in a sent message is a link that opens the task. Links become links.
+
+Alongside words you can send a **photo**, a **document** or a **voice note** — the mic is in the composer, the paperclip takes anything up to 5 MB per file, and pictures and voice notes play in the thread while documents come down as a download. Your own message can be **edited** (it shows as edited) or **deleted** (it stays in the thread as "deleted", and its file goes with it); a Team Lead or the CEO can delete anyone's in a room they are in.
+
+**Clear chat** and **delete chat** are both yours alone: they empty the thread from your side without touching anybody else's copy, and a deleted chat comes back the moment somebody writes in it again.
+
 ### Developer task sheets
 
 Every person has a **task sheet**: a full record of what they have shipped. Open your own from the sidebar, or anyone's from the People page (Leads, Managers and the CEO only — everyone else sees just their own).
@@ -225,9 +235,22 @@ Removal asks you to type `remove` to confirm, then:
 - **Everything they wrote is kept** — tasks they raised, comments, voice notes and progress reports all survive, credited to *“Removed user”*. Foreign keys are `ON DELETE SET NULL` rather than `CASCADE` precisely so offboarding never erases the record of what someone did.
 - Their login and all sessions are destroyed immediately.
 
-## Email notifications
+## Notifications
 
-Whenever a task is **assigned** to someone — on creation, on reassignment, or as one piece of a split — they get an email with the brief and a direct link.
+Something happening to your work reaches you on four channels, and the point of having four is that **only one of them needs you to be looking at Flow**:
+
+| Channel | Reaches you when | Needs |
+|---|---|---|
+| **In-app bell** | Flow is open | nothing |
+| **Email** | always — you never have to have signed in | SMTP (below) |
+| **Browser push** | Flow is closed, even the tab | `VAPID_*` keys, and each person turning push on once per device |
+| **Slack** | the team channel, for anything that moved a task | `SLACK_WEBHOOK_URL` |
+
+So: **somebody who has never opened the app still gets the email.** That is the channel that needs nothing from them. Push is the one that reaches a closed tab, but a browser only accepts push after that person has turned it on from **Settings → How to reach you** on that device — there is no way to push to somebody who has not agreed to it, in any app. Slack posts the task lifecycle (raised, assigned, submitted, approved, sent back) and mentions to one channel, deliberately not every chat message.
+
+**Not sure it is working?** Settings → **Send me a test on every channel** sends you one on each and reports back per channel — sent, not configured, or no device has push on yet. No waiting for a colleague to assign you something to find out.
+
+Email goes out whenever a task is **assigned** to someone — on creation, on reassignment, or as one piece of a split — and when they are mentioned, when work is submitted for review, when progress is posted, and when a task is approved.
 
 Set it up by copying `.env.example` to `.env.local` and filling in the Gmail block:
 
@@ -244,7 +267,9 @@ MAIL_FROM=Flow <you@gmail.com>
 APP_URL=https://your-app.vercel.app
 ```
 
-Email is entirely optional and fails soft: if SMTP is missing or the provider is down, the send is skipped and logged. Nobody ever loses a task assignment because an email bounced.
+Every channel is optional and fails soft: if SMTP is missing, the push service is down or the Slack webhook is dead, the send is skipped and logged. Nobody ever loses a task assignment because an email bounced.
+
+For push, generate a key pair once with `npm run push:keys` and paste the two values into `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` (plus `VAPID_SUBJECT`, a `mailto:` address). For Slack, create an incoming webhook — free, one URL, no app review — and set `SLACK_WEBHOOK_URL`.
 
 ## On a phone
 

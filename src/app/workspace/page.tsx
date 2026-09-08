@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { currentUser } from '@/lib/auth';
-import { allTags, allUsers, listNotifications, listTasks } from '@/lib/store';
+import { allTags, allUsers, getOrganization, listNotifications, listTasks } from '@/lib/store';
 import { canView } from '@/lib/permissions';
 import Workspace from '@/components/Workspace';
 
@@ -12,10 +12,12 @@ export default async function WorkspacePage() {
 
   const tasks = (await listTasks({ orgId: me.org_id, topLevelOnly: true })).filter((t) => canView(me, t));
   const notifications = await listNotifications(me.id);
+  const org = await getOrganization(me.org_id);
 
   return (
     <Workspace
       me={me}
+      orgName={org?.name ?? ''}
       initialTasks={tasks}
       initialUsers={await allUsers(me.org_id)}
       initialTags={await allTags(me.org_id)}

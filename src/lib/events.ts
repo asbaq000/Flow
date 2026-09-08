@@ -23,6 +23,8 @@ export type FlowEventType =
   | 'meeting.created'
   | 'meeting.updated'
   | 'message.added'
+  | 'message.updated'
+  | 'message.deleted'
   | 'conversation.updated'
   | 'notification';
 

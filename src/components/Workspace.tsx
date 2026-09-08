@@ -65,12 +65,14 @@ const VIEWS: { id: ViewKind; label: string; icon: React.ReactNode }[] = [
 
 export default function Workspace({
   me,
+  orgName,
   initialTasks,
   initialUsers,
   initialTags,
   initialNotifications,
 }: {
   me: User;
+  orgName: string;
   initialTasks: TaskFull[];
   initialUsers: User[];
   initialTags: Tag[];
@@ -450,6 +452,7 @@ export default function Workspace({
         <Sidebar
           floating={isMobile}
           me={me}
+          orgName={orgName}
           section={section}
           counts={{ tasks: counts.open, unread: counts.unread, messages: messageUnread }}
           onSection={(s) => {
@@ -718,6 +721,7 @@ export default function Workspace({
             <MessagesView
               me={me}
               users={users}
+              tasks={tasks}
               openTaskId={messagesTaskId}
               onOpenTask={(id) => {
                 // Task links in chat carry a ticket number, not an id.

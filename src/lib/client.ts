@@ -1,7 +1,8 @@
 'use client';
 
 import type {
-  Attachment, Block, Comment, ConversationFull, MeetingFull, Message, Notification, Organization, Priority,
+  Attachment, Block, Comment, ConversationFull, MeetingFull, Message, Notification, NotificationTestResult,
+  Organization, Priority,
   ProgressUpdate, Status, Tag, TaskFull,
   TaskSheet, User, VoiceNote,
 } from './types';
@@ -166,6 +167,7 @@ export const api = {
       request<{ activity: import('./types').ActivityItem[] }>(`/api/tasks/${taskId}/activity`),
   },
   notifications: {
+    test: () => request<NotificationTestResult>('/api/notifications/test', { method: 'POST' }),
     list: () => request<{ notifications: Notification[]; unread: number }>('/api/notifications'),
     read: (ids: string[] | 'all') =>
       request<{ ok: true }>('/api/notifications/read', { method: 'POST', body: JSON.stringify({ ids }) }),
@@ -260,6 +262,34 @@ export const api = {
       request<{ message: Message }>(`/api/conversations/${id}/messages`, {
         method: 'POST', body: JSON.stringify({ body }),
       }),
+    /** A photo, a document or a voice note, with an optional caption. */
+    sendFile: async (
+      id: string,
+      file: Blob,
+      opts: { filename: string; body?: string; kind?: 'voice'; durationMs?: number }
+    ) => {
+      const form = new FormData();
+      form.append('file', file, opts.filename);
+      form.append('filename', opts.filename);
+      if (opts.body) form.append('body', opts.body);
+      if (opts.kind) form.append('kind', opts.kind);
+      if (opts.durationMs) form.append('durationMs', String(opts.durationMs));
+      const res = await fetch(`/api/conversations/${id}/files`, { method: 'POST', body: form });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!res.ok) throw new ApiError(data.error ?? 'Upload failed', res.status);
+      return data as { message: Message };
+    },
+    fileUrl: (fileId: string) => `/api/message-files/${fileId}`,
+    /** Empties the thread for you alone. */
+    clear: (id: string) => request<{ ok: true }>(`/api/conversations/${id}/clear`, { method: 'POST' }),
+    /** Drops the room from your list (and clears it for you) until someone writes again. */
+    remove: (id: string) => request<{ ok: true }>(`/api/conversations/${id}`, { method: 'DELETE' }),
+  },
+  messages: {
+    edit: (id: string, body: string) =>
+      request<{ message: Message }>(`/api/messages/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
+    remove: (id: string) => request<{ ok: true }>(`/api/messages/${id}`, { method: 'DELETE' }),
   },
   profile: {
     withPictures: () => request<{ ids: string[] }>('/api/users/avatars'),

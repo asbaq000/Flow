@@ -22,11 +22,11 @@ export function slackWants(type: string): boolean {
   return slackEnabled && CHANNEL_WORTHY.has(type);
 }
 
-/** Fire-and-forget. A dead webhook must never fail the request that noticed. */
-export async function postToSlack(text: string, link?: string): Promise<void> {
-  if (!slackEnabled) return;
+/** Fire-and-forget for callers that do not wait; says whether Slack took it for those that do. */
+export async function postToSlack(text: string, link?: string): Promise<boolean> {
+  if (!slackEnabled) return false;
   try {
-    await fetch(WEBHOOK, {
+    const res = await fetch(WEBHOOK, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(8000),
@@ -34,7 +34,10 @@ export async function postToSlack(text: string, link?: string): Promise<void> {
         text: link ? `${text}\n<${link}|Open in Flow>` : text,
       }),
     });
+    if (!res.ok) console.warn('[slack] webhook answered', res.status);
+    return res.ok;
   } catch (err) {
     console.warn('[slack] post failed:', err instanceof Error ? err.message : err);
+    return false;
   }
 }

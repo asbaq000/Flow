@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Bell, BellOff, Building2, Camera, Check, Copy, Download, KeyRound, Loader2, Moon, RefreshCw, Sun,
-  TrendingUp,
+  Bell, BellOff, Building2, Camera, Check, Copy, Download, KeyRound, Loader2, Moon, RefreshCw, Send,
+  Sun, TrendingUp, X,
 } from 'lucide-react';
-import type { Organization, TaskSheet, User } from '@/lib/types';
+import type { NotificationTestResult, Organization, TaskSheet, User } from '@/lib/types';
 import { api } from '@/lib/client';
 import { usePush } from '@/lib/usePush';
 import { Avatar, avatarChanged, roleShort } from '../ui';
@@ -128,9 +128,11 @@ export default function ProfileView({
           <section className="card p-4">
             <h3 className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold"><Bell size={14} /> How to reach you</h3>
             <p className="mb-3 text-[12.5px] text-[var(--text-secondary)]">
-              Email goes out on its own. Push reaches this device even with Flow closed.
+              Email reaches you even if you never open Flow. Push reaches this device once you turn it on here,
+              tab closed or not. Slack, where set up, posts what moved to the team channel.
             </p>
             <PushToggle />
+            <NotificationTest />
             <div className="mt-4 border-t pt-3">
               <button onClick={onToggleTheme} className="btn btn-outline">
                 {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
@@ -298,6 +300,49 @@ function OrganizationCard({ me }: { me: User }) {
         </div>
       )}
     </section>
+  );
+}
+
+/** "Are notifications working?" — answered per channel, right now, for you. */
+function NotificationTest() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<NotificationTestResult | null>(null);
+  const [error, setError] = useState('');
+
+  const runTest = async () => {
+    setBusy(true); setError(''); setResult(null);
+    try {
+      setResult(await api.notifications.test());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send the test');
+    } finally { setBusy(false); }
+  };
+
+  const mark = (ok: boolean) => ok
+    ? <Check size={13} className="mt-0.5 shrink-0 text-emerald-600" />
+    : <X size={13} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />;
+
+  return (
+    <div className="mt-3 border-t pt-3">
+      <button onClick={runTest} disabled={busy} className="btn btn-outline">
+        {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send me a test on every channel
+      </button>
+      {error && <p className="mt-2 text-[12px] text-red-600">{error}</p>}
+      {result && (
+        <ul className="mt-2 space-y-1 text-[12.5px]">
+          <li className="flex gap-1.5">{mark(result.inApp.ok)}<span>In-app: {result.inApp.ok ? 'the bell has it' : 'did not arrive'}</span></li>
+          <li className="flex gap-1.5">{mark(result.email.ok)}<span>
+            Email to {result.email.to}: {!result.email.configured ? 'not set up on this install (SMTP)' : result.email.ok ? 'sent — check your inbox' : 'failed — the server could not send it'}
+          </span></li>
+          <li className="flex gap-1.5">{mark(result.push.ok)}<span>
+            Push: {!result.push.configured ? 'not set up on this install (VAPID keys)' : result.push.devices === 0 ? 'no device has push turned on yet — use the button above' : `${result.push.sent} of ${result.push.devices} ${result.push.devices === 1 ? 'device' : 'devices'} reached`}
+          </span></li>
+          <li className="flex gap-1.5">{mark(result.slack.ok)}<span>
+            Slack: {!result.slack.configured ? 'not set up on this install (webhook)' : result.slack.ok ? 'posted to the team channel' : 'the webhook refused it'}
+          </span></li>
+        </ul>
+      )}
+    </div>
   );
 }
 

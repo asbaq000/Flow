@@ -87,6 +87,12 @@ export default function ProgressPanel({
       setReviewNote('');
     });
 
+  // A lead closing something that never went through the formal gate — work
+  // done in a call, a fix that shipped, a reopened task that is finished again.
+  const markDone = () => run('approve', () => api.tasks.update(task.id, { status: 'DONE' }));
+  const canCloseDirectly =
+    task.status !== 'DONE' && task.status !== 'SUBMITTED' && (abilities?.allowedStatuses.includes('DONE') ?? false);
+
   const awaitingReview = task.status === 'SUBMITTED';
   const latestSubmission = task.progress_updates.find((u) => u.kind === 'submitted');
 
@@ -112,6 +118,18 @@ export default function ProgressPanel({
           </div>
         </div>
       </header>
+
+      {canCloseDirectly && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border p-3" style={{ background: 'var(--bg-subtle)' }}>
+          <span className="text-[12.5px] text-[var(--text-secondary)]">
+            Finished without a formal submission? A lead can close it here — no review needed.
+          </span>
+          <button onClick={markDone} className="btn btn-outline ml-auto py-1 text-[12.5px]" disabled={!!busy}>
+            {busy === 'approve' ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+            Mark as done
+          </button>
+        </div>
+      )}
 
       {/* ---- reviewer's decision ---- */}
       {awaitingReview && (abilities?.approve || abilities?.requestChanges) && (

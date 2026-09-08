@@ -12,6 +12,8 @@ interface Props {
   /** On phones the sidebar floats over the board instead of sitting beside it. */
   floating?: boolean;
   me: User;
+  /** The organisation this workspace belongs to. */
+  orgName?: string;
   section: Section;
   counts: { tasks: number; unread: number; messages: number };
   onSection: (s: Section) => void;
@@ -31,7 +33,7 @@ interface Item {
  * Where the reference had entries Flow has no equivalent for (Products,
  * Clients) they are left out rather than left dead.
  */
-export default function Sidebar({ floating = false, me, section, counts, onSection, onCollapse }: Props) {
+export default function Sidebar({ floating = false, me, orgName, section, counts, onSection, onCollapse }: Props) {
   const top: Item[] = [
     { id: 'all', label: 'Tasks', icon: <LayoutList size={16} />, badge: counts.tasks },
     { id: 'activity', label: 'Activities', icon: <Activity size={16} />, badge: counts.unread },
@@ -108,8 +110,15 @@ export default function Sidebar({ floating = false, me, section, counts, onSecti
         >
           F
         </span>
-        <span className="text-[17px] font-bold tracking-tight">flow</span>
-        <button onClick={onCollapse} className="btn btn-ghost ml-auto px-1" aria-label="Hide menu">
+        <span className="min-w-0 flex-1">
+          <span className="block text-[17px] font-bold leading-tight tracking-tight">flow</span>
+          {orgName && (
+            <span className="block truncate text-[11px] leading-tight text-[var(--text-tertiary)]" title={orgName}>
+              {orgName}
+            </span>
+          )}
+        </span>
+        <button onClick={onCollapse} className="btn btn-ghost px-1" aria-label="Hide menu">
           <ChevronsLeft size={15} />
         </button>
       </div>
