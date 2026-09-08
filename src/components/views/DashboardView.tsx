@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
+import { ENTRANCE_PROPS, gsap, useGsap } from '@/lib/gsap';
 import type { TaskFull, User } from '@/lib/types';
 import { PRIORITIES, STATUSES } from '@/lib/types';
 import { Avatar } from '../ui';
@@ -39,9 +40,34 @@ export default function DashboardView({ tasks, users, onOpenTask }: {
   }, [tasks, users]);
 
   const max = Math.max(1, ...d.byStatus.map((s) => s.n));
+  const root = useRef<HTMLDivElement>(null);
+
+  /*
+   * One orchestrated entrance: the four tiles count up while they settle,
+   * then the bars grow from the left as each panel arrives. Bars animate
+   * scaleX, never width, so nothing lays out mid-animation. Keyed on the
+   * task count so a live update that changes the numbers plays it once
+   * more, but a refresh that changes nothing does not.
+   */
+  useGsap(() => {
+    const tl = gsap.timeline({ defaults: { ease: 'power3.out' } });
+    tl.from('[data-tile]', { y: 14, autoAlpha: 0, stagger: 0.06, duration: 0.45, clearProps: ENTRANCE_PROPS })
+      .from('[data-panel]', { y: 18, autoAlpha: 0, stagger: 0.08, duration: 0.5, clearProps: ENTRANCE_PROPS }, '-=0.25')
+      .from('[data-bar]', { scaleX: 0, transformOrigin: 'left center', stagger: 0.03, duration: 0.6, clearProps: 'transform' }, '-=0.35');
+
+    // Numbers count up from zero. A tween on a plain object, painted into the DOM.
+    gsap.utils.toArray<HTMLElement>('[data-count]').forEach((el) => {
+      const target = Number(el.dataset.count ?? 0);
+      const box = { n: 0 };
+      gsap.to(box, {
+        n: target, duration: 0.8, ease: 'power2.out',
+        onUpdate: () => { el.textContent = String(Math.round(box.n)); },
+      });
+    });
+  }, [d.flat.length, d.doneWeek, d.inReview, d.overdue.length], root);
 
   return (
-    <div className="scroll-thin h-full overflow-y-auto">
+    <div ref={root} className="scroll-thin h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl px-5 py-6">
         <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
           <Tile label="Open" value={d.open.length} />
@@ -51,7 +77,7 @@ export default function DashboardView({ tasks, users, onOpenTask }: {
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <section className="card p-4">
+          <section className="card p-4" data-panel>
             <h3 className="mb-3 text-[13px] font-semibold">Where work sits</h3>
             <ul className="space-y-2">
               {d.byStatus.map((s) => (
@@ -59,7 +85,7 @@ export default function DashboardView({ tasks, users, onOpenTask }: {
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.dot }} />
                   <span className="w-[130px] shrink-0 text-[var(--text-secondary)]">{s.label}</span>
                   <span className="h-2 flex-1 overflow-hidden rounded-full" style={{ background: 'var(--well)' }}>
-                    <span className="block h-full rounded-full" style={{ width: `${(s.n / max) * 100}%`, background: s.dot }} />
+                    <span className="block h-full rounded-full" data-bar style={{ width: `${(s.n / max) * 100}%`, background: s.dot }} />
                   </span>
                   <span className="w-6 text-right font-mono tabular-nums">{s.n}</span>
                 </li>
@@ -67,7 +93,7 @@ export default function DashboardView({ tasks, users, onOpenTask }: {
             </ul>
           </section>
 
-          <section className="card p-4">
+          <section className="card p-4" data-panel>
             <h3 className="mb-3 text-[13px] font-semibold">Open work by urgency</h3>
             <ul className="space-y-2">
               {d.byPriority.map((p) => (
@@ -75,7 +101,7 @@ export default function DashboardView({ tasks, users, onOpenTask }: {
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: p.color }} />
                   <span className="w-[130px] shrink-0 text-[var(--text-secondary)]">{p.label}</span>
                   <span className="h-2 flex-1 overflow-hidden rounded-full" style={{ background: 'var(--well)' }}>
-                    <span className="block h-full rounded-full" style={{ width: `${(p.n / Math.max(1, d.open.length)) * 100}%`, background: p.color }} />
+                    <span className="block h-full rounded-full" data-bar style={{ width: `${(p.n / Math.max(1, d.open.length)) * 100}%`, background: p.color }} />
                   </span>
                   <span className="w-6 text-right font-mono tabular-nums">{p.n}</span>
                 </li>
@@ -83,7 +109,7 @@ export default function DashboardView({ tasks, users, onOpenTask }: {
             </ul>
           </section>
 
-          <section className="card p-4">
+          <section className="card p-4" data-panel>
             <h3 className="mb-3 text-[13px] font-semibold">Who is carrying what</h3>
             {d.load.length === 0 ? (
               <p className="text-[12.5px] text-[var(--text-tertiary)]">No developers yet.</p>
@@ -102,7 +128,7 @@ export default function DashboardView({ tasks, users, onOpenTask }: {
             )}
           </section>
 
-          <section className="card p-4">
+          <section className="card p-4" data-panel>
             <h3 className="mb-3 text-[13px] font-semibold">Needs attention</h3>
             {d.overdue.length === 0 && d.dueSoon.length === 0 ? (
               <p className="text-[12.5px] text-[var(--text-tertiary)]">Nothing overdue and nothing due in the next three days.</p>
@@ -134,8 +160,8 @@ export default function DashboardView({ tasks, users, onOpenTask }: {
 function Tile({ label, value, tone }: { label: string; value: number; tone?: 'good' | 'warn' }) {
   const color = tone === 'good' ? 'var(--s-done-dot)' : tone === 'warn' ? 'var(--s-blocked-dot)' : undefined;
   return (
-    <div className="card p-4">
-      <div className="font-mono text-[28px] font-semibold leading-none tabular-nums" style={{ color }}>{value}</div>
+    <div className="card p-4" data-tile>
+      <div className="font-mono text-[28px] font-semibold leading-none tabular-nums" style={{ color }} data-count={value}>{value}</div>
       <div className="mt-1.5 text-[11.5px] text-[var(--text-tertiary)]">{label}</div>
     </div>
   );

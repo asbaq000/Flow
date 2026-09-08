@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ENTRANCE_PROPS, gsap, useGsap } from '@/lib/gsap';
 import { useRouter } from 'next/navigation';
 import {
   Archive, Bell, CalendarDays, Check, ChevronDown, Columns3, Inbox, LayoutList, Menu, Moon,
@@ -412,6 +413,18 @@ export default function Workspace({
   const activeFilterCount =
     filters.status.length + filters.priority.length + filters.assignee.length + filters.tag.length;
 
+  /*
+   * A quiet entrance whenever the section changes: the page header slides
+   * down a touch and the body fades up under it. Keyed on the section only
+   * — a live refresh must never make the page it is refreshing blink.
+   */
+  const mainRef = useRef<HTMLElement>(null);
+  useGsap(() => {
+    gsap.timeline({ defaults: { ease: 'power3.out' } })
+      .from('[data-page-head]', { y: -8, autoAlpha: 0, duration: 0.35, clearProps: ENTRANCE_PROPS })
+      .from('[data-page-body]', { y: 10, autoAlpha: 0, duration: 0.4, clearProps: ENTRANCE_PROPS }, '-=0.2');
+  }, [section, view], mainRef);
+
   const openTask = useMemo(() => {
     for (const t of tasks) {
       if (t.id === openTaskId) return t;
@@ -452,7 +465,7 @@ export default function Workspace({
         />
       )}
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main ref={mainRef} className="flex min-w-0 flex-1 flex-col">
         {/* ---- header ---- */}
         {/* ---- welcome bar: who, search, help, bell ---- */}
         <div className="flex h-[58px] shrink-0 items-center gap-3 border-b px-4">
@@ -517,7 +530,7 @@ export default function Workspace({
           </div>
         </div>
 
-        <header className="flex min-h-[46px] shrink-0 items-center gap-2 border-b px-4 py-1.5">
+        <header data-page-head className="flex min-h-[46px] shrink-0 items-center gap-2 border-b px-4 py-1.5">
           {BOARD_SECTIONS.includes(section) ? (
             <>
               <div className="leading-tight">
@@ -689,7 +702,7 @@ export default function Workspace({
         </header>
 
         {/* ---- body ---- */}
-        <div className="min-h-0 flex-1 overflow-hidden">
+        <div data-page-body className="min-h-0 flex-1 overflow-hidden">
           {section === 'people' ? (
             <PeopleView me={me} onChanged={() => refresh()} onOpenSheet={setSheetUserId} />
           ) : section === 'dashboard' ? (
@@ -758,6 +771,7 @@ export default function Workspace({
               users={users}
               me={me}
               groupBy={groupBy}
+              sceneKey={section}
               onOpen={setOpenTaskId}
               onUpdate={updateTask}
               onSplit={(t) => setSplitTask(t)}

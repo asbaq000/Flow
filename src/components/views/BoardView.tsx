@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { ENTRANCE_PROPS, ScrollTrigger, gsap, useGsap } from '@/lib/gsap';
 import {
   DndContext, DragOverlay, PointerSensor, closestCorners, useDroppable, useSensor, useSensors,
 } from '@dnd-kit/core';
@@ -20,6 +21,8 @@ interface Props {
   users: User[];
   me: User;
   groupBy: GroupBy;
+  /** Changes when the board is showing a different scope, replaying the entrance. */
+  sceneKey?: string;
   onOpen: (id: string) => void;
   onUpdate: (id: string, patch: { status?: Status; assigneeId?: string | null; priority?: Priority }) => void;
   onSplit: (task: TaskFull) => void;
@@ -32,9 +35,99 @@ interface Column {
   tasks: TaskFull[];
 }
 
-export default function BoardView({ tasks, users, me, groupBy, onOpen, onUpdate, onSplit }: Props) {
+export default function BoardView({ tasks, users, me, groupBy, sceneKey, onOpen, onUpdate, onSplit }: Props) {
   const [dragging, setDragging] = useState<TaskFull | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const boardRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * Entrances and scroll reveals, all keyed on what the board is showing —
+   * never on the task data, so a live update cannot make a board blink.
+   *
+   * Columns slide in as the row scrolls sideways (the row is the scroller,
+   * not the window: this app never scrolls the page). Cards rise in as their
+   * own column scrolls, batched so a column of ten arrives as one stagger
+   * rather than ten separate tweens. Only the <article> is touched — the
+   * wrapper around it belongs to dnd-kit — and every inline style GSAP sets
+   * is cleared when it finishes.
+   */
+  useGsap(() => {
+    const row = boardRef.current!;
+    const cols = gsap.utils.toArray<HTMLElement>('[data-col]', row);
+    const cards = gsap.utils.toArray<HTMLElement>('[data-col] article.card', row);
+    if (!cols.length) return;
+
+    gsap.set(cols, { x: 24, autoAlpha: 0 });
+    ScrollTrigger.batch(cols, {
+      scroller: row,
+      horizontal: true,
+      start: 'left 100%',
+      once: true,
+      onEnter: (batch) => gsap.to(batch, {
+        x: 0, autoAlpha: 1, duration: 0.45, ease: 'power3.out', stagger: 0.07, clearProps: ENTRANCE_PROPS,
+      }),
+    });
+
+    if (cards.length) {
+      gsap.set(cards, { y: 14, autoAlpha: 0 });
+      for (const col of cols) {
+        const body = col.querySelector<HTMLElement>('[data-col-body]');
+        const own = cards.filter((c) => col.contains(c));
+        if (!body || !own.length) continue;
+        ScrollTrigger.batch(own, {
+          scroller: body,
+          start: 'top 100%',
+          once: true,
+          onEnter: (batch) => {
+            gsap.to(batch, {
+              y: 0, autoAlpha: 1, duration: 0.4, ease: 'power3.out', stagger: 0.05, clearProps: ENTRANCE_PROPS,
+            });
+            // Progress pips fill in left to right as their card arrives.
+            const pips = batch.flatMap((c) => gsap.utils.toArray<HTMLElement>('.pip[data-on="true"]', c));
+            if (pips.length) {
+              gsap.from(pips, {
+                scaleX: 0, transformOrigin: 'left center', duration: 0.5, ease: 'power3.out',
+                stagger: 0.02, clearProps: 'transform',
+              });
+            }
+          },
+        });
+      }
+    }
+
+    ScrollTrigger.refresh();
+
+    /*
+     * Insurance, scoped carefully: anything still hidden after a beat that
+     * is actually inside its scroller's viewport gets shown regardless of
+     * what the scroll maths decided. Anything off-screen is left alone —
+     * that is the scroll reveal waiting to happen, not a failure.
+     */
+    gsap.delayedCall(1.2, () => {
+      const inView = (el: HTMLElement, scroller: HTMLElement) => {
+        const a = el.getBoundingClientRect();
+        const b = scroller.getBoundingClientRect();
+        return a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+      };
+      const stuck = [
+        ...cols.filter((c) => inView(c, row)),
+        ...cards.filter((c) => {
+          const col = c.closest<HTMLElement>('[data-col]');
+          const body = col?.querySelector<HTMLElement>('[data-col-body]');
+          return col && body && inView(col, row) && inView(c, body);
+        }),
+      ].filter((el) => gsap.getProperty(el, 'opacity') !== 1);
+      if (stuck.length) gsap.to(stuck, { x: 0, y: 0, autoAlpha: 1, duration: 0.3, clearProps: ENTRANCE_PROPS });
+    });
+  }, [groupBy, sceneKey], boardRef);
+
+  /** A dropped card lands with a small settle once it is in its new column. */
+  const settle = (taskId: string) => {
+    gsap.delayedCall(0.08, () => {
+      const el = boardRef.current?.querySelector<HTMLElement>(`[data-task-id="${taskId}"] article.card`);
+      if (el) gsap.fromTo(el, { scale: 1.035 }, { scale: 1, duration: 0.45, ease: 'back.out(2.2)', clearProps: 'transform' });
+    });
+  };
 
   const columns: Column[] = useMemo(() => {
     if (groupBy === 'status') {
@@ -85,14 +178,17 @@ export default function BoardView({ tasks, users, me, groupBy, onOpen, onUpdate,
       if (task.status === targetColumn.id) return;
       if (!canChangeStatus(me, task)) return;
       onUpdate(task.id, { status: targetColumn.id as Status });
+      settle(task.id);
     } else if (groupBy === 'priority') {
       if (task.priority === targetColumn.id) return;
       onUpdate(task.id, { priority: targetColumn.id as Priority });
+      settle(task.id);
     } else {
       const next = targetColumn.id === '__none__' ? null : targetColumn.id;
       if (task.assignee_id === next) return;
       if (!canAssign(me)) return;
       onUpdate(task.id, { assigneeId: next });
+      settle(task.id);
     }
   }
 
@@ -108,7 +204,7 @@ export default function BoardView({ tasks, users, me, groupBy, onOpen, onUpdate,
       onDragEnd={handleDragEnd}
       onDragCancel={() => setDragging(null)}
     >
-      <div className="scroll-thin flex h-full items-start gap-3 overflow-x-auto p-3">
+      <div ref={boardRef} className="scroll-thin flex h-full items-start gap-3 overflow-x-auto p-3">
         {columns.map((col) => (
           <BoardColumn key={col.id} column={col}>
             <SortableContext items={col.tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
@@ -126,14 +222,31 @@ export default function BoardView({ tasks, users, me, groupBy, onOpen, onUpdate,
         ))}
       </div>
 
-      <DragOverlay dropAnimation={{ duration: 160, easing: 'cubic-bezier(0.2, 0, 0, 1)' }}>
+      <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' }}>
         {dragging && (
-          <div style={{ transform: 'rotate(2deg)', boxShadow: 'var(--shadow-lg)', borderRadius: 6 }}>
+          <Lifted>
             <TaskCard task={dragging} me={me} onOpen={() => {}} onSplit={() => {}} />
-          </div>
+          </Lifted>
         )}
       </DragOverlay>
     </DndContext>
+  );
+}
+
+/**
+ * The card while it is being carried. dnd-kit moves the overlay's root with
+ * a transform, so the lift — a slight scale and tilt — happens on this inner
+ * element, which nothing else is animating.
+ */
+function Lifted({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useGsap(() => {
+    gsap.fromTo(ref.current, { scale: 0.98, rotation: 0 }, { scale: 1.03, rotation: 2, duration: 0.18, ease: 'power2.out' });
+  }, [], ref);
+  return (
+    <div ref={ref} style={{ boxShadow: 'var(--shadow-lg)', borderRadius: 16, willChange: 'transform' }}>
+      {children}
+    </div>
   );
 }
 
@@ -143,6 +256,7 @@ function BoardColumn({ column, children }: { column: Column; children: React.Rea
   return (
     <section
       ref={setNodeRef}
+      data-col
       className="flex max-h-full w-[288px] shrink-0 flex-col rounded-2xl transition-colors"
       style={{ background: isOver ? 'var(--accent-soft)' : 'var(--bg-subtle)' }}
     >
@@ -158,7 +272,7 @@ function BoardColumn({ column, children }: { column: Column; children: React.Rea
         {isOver && <span className="text-[11px] text-[var(--accent)]">drop</span>}
       </header>
 
-      <div className="scroll-thin flex min-h-[60px] flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
+      <div data-col-body className="scroll-thin flex min-h-[60px] flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
         {children}
         {!column.tasks.length && (
           <div className="grid place-items-center rounded-xl border border-dashed py-7 text-[12px] text-[var(--text-tertiary)]">
@@ -183,6 +297,7 @@ function SortableCard({
   return (
     <div
       ref={setNodeRef}
+      data-task-id={task.id}
       style={{ transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.35 : 1 }}
       {...attributes}
       {...listeners}
