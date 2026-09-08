@@ -79,7 +79,7 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
       {/* ---- left: the pitch ---- */}
       <aside className="hidden w-[46%] flex-col justify-between p-12 lg:flex" style={{ background: 'var(--bg-sidebar)' }}>
         <div className="flex items-center gap-2.5">
-          <div className="grid h-8 w-8 place-items-center rounded-md bg-[var(--accent)] text-[15px] font-bold text-white">
+          <div className="grid h-8 w-8 place-items-center rounded-xl bg-[var(--accent)] text-[15px] font-bold text-[var(--on-accent)]">
             F
           </div>
           <span className="text-[15px] font-semibold">Flow</span>
@@ -118,7 +118,7 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
       <main className="flex flex-1 items-center justify-center p-6">
         <div className="w-full max-w-[380px]">
           <div className="mb-8 lg:hidden">
-            <div className="grid h-9 w-9 place-items-center rounded-md bg-[var(--accent)] text-base font-bold text-white">
+            <div className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--accent)] text-base font-bold text-[var(--on-accent)]">
               F
             </div>
           </div>
@@ -218,7 +218,7 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
                           background: role === r.id ? 'var(--accent)' : 'transparent',
                         }}
                       >
-                        {role === r.id && <Check size={11} className="text-white" strokeWidth={3} />}
+                        {role === r.id && <Check size={11} className="text-[var(--on-accent)]" strokeWidth={3} />}
                       </div>
                       <div className="min-w-0">
                         <div className="text-[13px] font-medium">{r.label}</div>

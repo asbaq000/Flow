@@ -110,16 +110,28 @@ export default function Sidebar({
             <button
               key={item.id}
               onClick={() => onSection(item.id)}
-              className="mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-[13.5px] transition-colors"
+              className="mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13.5px] transition-colors hover:bg-[var(--bg-hover)]"
               style={{
-                background: section === item.id ? 'var(--bg-active)' : 'transparent',
+                // The active row is a solid accent fill, so the icon and the
+                // count on top of it must name the colour that sits there.
+                background: section === item.id ? 'var(--accent)' : 'transparent',
+                color: section === item.id ? 'var(--on-accent)' : undefined,
                 fontWeight: section === item.id ? 600 : 400,
               }}
             >
-              <span className="text-[var(--text-secondary)]">{item.icon}</span>
+              <span style={{ color: section === item.id ? 'var(--on-accent)' : 'var(--text-secondary)' }}>
+                {item.icon}
+              </span>
               <span className="flex-1 truncate text-left">{item.label}</span>
               {!!item.badge && item.badge > 0 && (
-                <span className="rounded bg-[var(--bg-active)] px-1.5 text-[11px] font-medium text-[var(--text-secondary)]">
+                <span
+                  className="rounded-full px-1.5 text-[11px] font-medium tabular-nums"
+                  style={
+                    section === item.id
+                      ? { background: 'rgba(255,255,255,0.22)', color: 'var(--on-accent)' }
+                      : { background: 'var(--well)', color: 'var(--text-secondary)' }
+                  }
+                >
                   {item.badge}
                 </span>
               )}
@@ -128,7 +140,7 @@ export default function Sidebar({
 
         <button
           onClick={onOpenMySheet}
-          className="mb-0.5 flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-[13.5px] transition-colors hover:bg-[var(--bg-hover)]"
+          className="mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13.5px] transition-colors hover:bg-[var(--bg-hover)]"
         >
           <span className="text-[var(--text-secondary)]"><ClipboardList size={15} /></span>
           <span className="flex-1 truncate text-left">My task sheet</span>
@@ -161,7 +173,7 @@ function Step({ n, label, active }: { n: number; label: string; active: boolean 
         className="grid h-[16px] w-[16px] shrink-0 place-items-center rounded-full text-[9px] font-bold"
         style={{
           background: active ? 'var(--accent)' : 'var(--bg-active)',
-          color: active ? '#fff' : 'var(--text-tertiary)',
+          color: active ? 'var(--on-accent)' : 'var(--text-tertiary)',
         }}
       >
         {n}

@@ -108,7 +108,7 @@ export default function BoardView({ tasks, users, me, groupBy, onOpen, onUpdate,
       onDragEnd={handleDragEnd}
       onDragCancel={() => setDragging(null)}
     >
-      <div className="scroll-thin flex h-full gap-3 overflow-x-auto p-3">
+      <div className="scroll-thin flex h-full items-start gap-3 overflow-x-auto p-3">
         {columns.map((col) => (
           <BoardColumn key={col.id} column={col}>
             <SortableContext items={col.tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
@@ -143,20 +143,26 @@ function BoardColumn({ column, children }: { column: Column; children: React.Rea
   return (
     <section
       ref={setNodeRef}
-      className="flex w-[286px] shrink-0 flex-col rounded-lg transition-colors"
-      style={{ background: isOver ? 'var(--bg-active)' : 'var(--bg-subtle)' }}
+      className="flex max-h-full w-[288px] shrink-0 flex-col rounded-2xl transition-colors"
+      style={{ background: isOver ? 'var(--accent-soft)' : 'var(--bg-subtle)' }}
     >
-      <header className="flex items-center gap-2 px-3 py-2.5">
+      <header className="flex items-center gap-2 px-3.5 pb-1.5 pt-3">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: column.color }} />
         <h3 className="min-w-0 flex-1 truncate text-[12.5px] font-semibold">{column.label}</h3>
-        <span className="text-[11.5px] font-medium text-[var(--text-tertiary)]">{column.tasks.length}</span>
+        <span
+          className="rounded-full px-1.5 text-[11px] font-medium tabular-nums text-[var(--text-secondary)]"
+          style={{ background: 'var(--well)' }}
+        >
+          {column.tasks.length}
+        </span>
+        {isOver && <span className="text-[11px] text-[var(--accent)]">drop</span>}
       </header>
 
       <div className="scroll-thin flex min-h-[60px] flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
         {children}
         {!column.tasks.length && (
-          <div className="grid flex-1 place-items-center rounded-md border border-dashed py-6 text-[12px] text-[var(--text-tertiary)]">
-            Drop tasks here
+          <div className="grid place-items-center rounded-xl border border-dashed py-7 text-[12px] text-[var(--text-tertiary)]">
+            Nothing here
           </div>
         )}
       </div>
@@ -201,8 +207,7 @@ export function TaskCard({
   return (
     <article
       onClick={onOpen}
-      className="card cursor-pointer p-2.5 transition-shadow hover:shadow-md"
-      style={{ boxShadow: 'var(--shadow-sm)' }}
+      className={`card pri-${task.priority} cursor-pointer p-3 transition-all hover:-translate-y-px hover:shadow-md`}
     >
       {task.tags.length > 0 && (
         <div className="mb-1.5 flex flex-wrap gap-1">
@@ -218,22 +223,32 @@ export function TaskCard({
         {task.title}
       </p>
 
-      {task.subtasks.length > 0 && (
-        <div className="mt-2">
-          <div className="mb-1 flex items-center gap-1.5 text-[11.5px] text-[var(--text-secondary)]">
+      {task.subtasks.length > 0 ? (
+        <div className="mt-2.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-[var(--text-secondary)]">
             <GitBranch size={11} />
-            Split across {task.subtasks.length} · {doneSubs}/{task.subtasks.length} done
+            Split across {task.subtasks.length}
+            <span className="ml-auto font-mono text-[11px] tabular-nums">
+              {doneSubs}/{task.subtasks.length}
+            </span>
           </div>
-          <div className="h-1 overflow-hidden rounded-full" style={{ background: 'var(--bg-active)' }}>
-            <div
-              className="h-full rounded-full transition-all"
-              style={{
-                width: `${(doneSubs / task.subtasks.length) * 100}%`,
-                background: doneSubs === task.subtasks.length ? '#10b981' : 'var(--accent)',
-              }}
-            />
-          </div>
+          <Pips
+            done={doneSubs}
+            total={task.subtasks.length}
+            color={doneSubs === task.subtasks.length ? 'var(--s-done-dot)' : 'var(--accent)'}
+          />
         </div>
+      ) : (
+        /* Progress only means something once work has actually started. */
+        task.progress > 0 && task.status !== 'DONE' && (
+          <div className="mt-2.5">
+            <div className="mb-1.5 flex items-center text-[11.5px] text-[var(--text-secondary)]">
+              Progress
+              <span className="ml-auto font-mono text-[11px] tabular-nums">{task.progress}%</span>
+            </div>
+            <Pips done={Math.round(task.progress / 10)} total={10} color="var(--accent)" />
+          </div>
+        )
       )}
 
       <footer className="mt-2.5 flex items-center gap-2">
@@ -283,7 +298,24 @@ export function TaskCard({
         )}
       </footer>
 
-      <div className="mt-1.5 text-[10.5px] text-[var(--text-tertiary)]">TSK-{task.seq}</div>
+      <div className="mt-2 font-mono text-[10.5px] tabular-nums text-[var(--text-tertiary)]">
+        TSK-{task.seq}
+      </div>
     </article>
+  );
+}
+
+/**
+ * Progress as discrete pips. A percentage typed by hand is a rough claim, and
+ * ten segments say that honestly where a smooth bar implies a precision
+ * nobody actually has.
+ */
+function Pips({ done, total, color }: { done: number; total: number; color: string }) {
+  return (
+    <div className="pips" role="img" aria-label={`${done} of ${total} complete`}>
+      {Array.from({ length: total }, (_, i) => (
+        <span key={i} className="pip" data-on={i < done} style={{ '--pip': color } as React.CSSProperties} />
+      ))}
+    </div>
   );
 }

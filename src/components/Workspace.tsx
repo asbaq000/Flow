@@ -761,7 +761,7 @@ function FilterMenu({
           <ChevronDown size={13} />
           <span className="hidden text-[12.5px] sm:inline">Filter</span>
           {count > 0 && (
-            <span className="rounded bg-[var(--accent)] px-1 text-[10px] font-bold text-white">{count}</span>
+            <span className="rounded-full bg-[var(--accent)] px-1.5 text-[10px] font-bold text-[var(--on-accent)]">{count}</span>
           )}
         </button>
       )}

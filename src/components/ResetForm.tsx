@@ -42,7 +42,7 @@ export default function ResetForm({ token }: { token: string }) {
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-[380px]">
-        <div className="mb-7 grid h-9 w-9 place-items-center rounded-md bg-[var(--accent)] text-base font-bold text-white">
+        <div className="mb-7 grid h-9 w-9 place-items-center rounded-xl bg-[var(--accent)] text-base font-bold text-[var(--on-accent)]">
           F
         </div>
 

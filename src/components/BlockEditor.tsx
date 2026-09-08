@@ -616,7 +616,7 @@ function renderBlock(block: Block, shared: any, props: RowProps, placeholder: st
             }}
             aria-label={block.checked ? 'Mark incomplete' : 'Mark complete'}
           >
-            {block.checked && <Check size={11} className="text-white" strokeWidth={3} />}
+            {block.checked && <Check size={11} className="text-[var(--on-accent)]" strokeWidth={3} />}
           </button>
           <div
             {...ce}

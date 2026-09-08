@@ -1,65 +1,117 @@
 @import 'tailwindcss';
 
 /* ---------------------------------------------------------------
-   Notion-derived design tokens. Light is the base; dark overrides
-   only the values, so every component stays theme-agnostic.
+   Design tokens. Light is the base; dark overrides only the values,
+   so every component stays theme-agnostic.
+
+   Colour carries meaning rather than decoration. Violet is the one
+   accent — brand, links, anything interactive — and the seven status
+   hues below are the only other colours in the interface, each tied
+   to one column of the board. Nothing else gets tinted.
+
+   Every inverted surface names what sits on it (--on-accent), because
+   `background: var(--accent); color: #fff` silently breaks the moment
+   an accent inverts to a pale tone, and a light-mode screenshot will
+   never show it.
 ---------------------------------------------------------------- */
 :root {
-  --bg: #ffffff;
-  --bg-sidebar: #f7f7f5;
+  /* Lavender-grey ground so white cards read as raised, not as more page. */
+  --bg: #f4f4f9;
+  --bg-sidebar: #ffffff;
   --bg-panel: #ffffff;
-  --bg-hover: rgba(55, 53, 47, 0.06);
-  --bg-active: rgba(55, 53, 47, 0.1);
+  --bg-hover: rgba(89, 80, 150, 0.06);
+  --bg-active: rgba(89, 80, 150, 0.11);
   --bg-input: #ffffff;
-  --bg-subtle: #f7f7f5;
+  --bg-subtle: #f7f7fb;
   --bg-card: #ffffff;
+  /* Recessed wells (tracks, insets). A black tint would vanish in dark. */
+  --well: rgba(89, 80, 150, 0.07);
 
-  --text: #37352f;
-  --text-secondary: #787774;
-  --text-tertiary: #9b9a97;
+  --text: #1b1b2b;
+  --text-secondary: #62627a;
+  --text-tertiary: #9797ac;
   --text-inverse: #ffffff;
 
-  --border: #e9e9e7;
-  --border-strong: #dcdcda;
+  --border: #e8e8f1;
+  --border-strong: #d8d8e6;
 
-  --accent: #2383e2;
-  --accent-hover: #1a6dc0;
-  --accent-soft: rgba(35, 131, 226, 0.12);
+  --accent: #6c5ce7;
+  --accent-hover: #5a49d6;
+  --accent-soft: rgba(108, 92, 231, 0.11);
+  --on-accent: #ffffff;
 
-  --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.06);
-  --shadow-md: 0 4px 12px rgba(15, 15, 15, 0.1);
-  --shadow-lg: 0 12px 32px rgba(15, 15, 15, 0.14), 0 2px 6px rgba(15, 15, 15, 0.08);
+  /* Wide and low so cards look set down rather than cut out. */
+  --shadow-sm: 0 1px 2px rgba(38, 30, 84, 0.05);
+  --shadow-md: 0 6px 18px rgba(38, 30, 84, 0.08);
+  --shadow-lg: 0 18px 44px rgba(38, 30, 84, 0.14), 0 3px 8px rgba(38, 30, 84, 0.06);
 
-  --radius: 6px;
+  --radius: 12px;
+  --radius-card: 16px;
+
+  /* Card washes by urgency — pale enough that black text still reads on them. */
+  --p-urgent-bg: #ffe6ec;  --p-urgent-edge: #f7c9d5;
+  --p-high-bg: #ffeee4;    --p-high-edge: #f8d5c4;
+  --p-medium-bg: #fff6e0;  --p-medium-edge: #f5e3bd;
+  --p-low-bg: #e9f1ff;     --p-low-edge: #cfe0f9;
+
+  /* One tint + one dot per board column. */
+  --s-triage-bg: #fff3e2;      --s-triage-dot: #f0913a;
+  --s-todo-bg: #eeeafe;        --s-todo-dot: #7c6cf0;
+  --s-progress-bg: #e3f0ff;    --s-progress-dot: #3d8bfd;
+  --s-review-bg: #fdeaf7;      --s-review-dot: #d857ae;
+  --s-changes-bg: #ffe9e4;     --s-changes-dot: #f4693f;
+  --s-blocked-bg: #ffe4ec;     --s-blocked-dot: #ec4a72;
+  --s-done-bg: #ddf6ec;        --s-done-dot: #12a06a;
 
   color-scheme: light;
 }
 
 [data-theme='dark'] {
-  --bg: #191919;
-  --bg-sidebar: #202020;
-  --bg-panel: #252525;
-  --bg-hover: rgba(255, 255, 255, 0.055);
-  --bg-active: rgba(255, 255, 255, 0.1);
-  --bg-input: #2a2a2a;
-  --bg-subtle: #222222;
-  --bg-card: #252525;
+  --bg: #12121a;
+  --bg-sidebar: #191924;
+  --bg-panel: #1c1c28;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(255, 255, 255, 0.11);
+  --bg-input: #21212e;
+  --bg-subtle: #191924;
+  --bg-card: #1c1c28;
+  --well: rgba(255, 255, 255, 0.07);
 
-  --text: #e6e6e4;
-  --text-secondary: #9b9a97;
-  --text-tertiary: #6f6f6c;
-  --text-inverse: #191919;
+  --text: #ececf5;
+  --text-secondary: #a2a2b8;
+  --text-tertiary: #6f6f88;
+  --text-inverse: #12121a;
 
-  --border: #2f2f2f;
-  --border-strong: #3d3d3d;
+  --border: #292937;
+  --border-strong: #383849;
 
-  --accent: #4a9eff;
-  --accent-hover: #6cb0ff;
-  --accent-soft: rgba(74, 158, 255, 0.16);
+  /* Lifted, because #6C5CE7 on near-black reads as a dead panel. */
+  --accent: #8b7bf7;
+  --accent-hover: #a495ff;
+  --accent-soft: rgba(139, 123, 247, 0.18);
+  --on-accent: #14101f;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.6), 0 3px 8px rgba(0, 0, 0, 0.4);
+
+  --p-urgent-bg: rgba(236, 74, 114, 0.13);  --p-urgent-edge: rgba(236, 74, 114, 0.3);
+  --p-high-bg: rgba(244, 105, 63, 0.12);    --p-high-edge: rgba(244, 105, 63, 0.28);
+  --p-medium-bg: rgba(240, 145, 58, 0.11);  --p-medium-edge: rgba(240, 145, 58, 0.26);
+  --p-low-bg: rgba(61, 139, 253, 0.12);     --p-low-edge: rgba(61, 139, 253, 0.28);
+
+  /*
+   * The pastels become deep translucent washes: a #FFF3E2 card on a
+   * near-black ground is a headlight, and the dots have to lift to stay
+   * legible against it.
+   */
+  --s-triage-bg: rgba(240, 145, 58, 0.14);   --s-triage-dot: #f0a862;
+  --s-todo-bg: rgba(124, 108, 240, 0.16);    --s-todo-dot: #9a8cf7;
+  --s-progress-bg: rgba(61, 139, 253, 0.15); --s-progress-dot: #6ba7fd;
+  --s-review-bg: rgba(216, 87, 174, 0.15);   --s-review-dot: #e57ec3;
+  --s-changes-bg: rgba(244, 105, 63, 0.15);  --s-changes-dot: #f78a68;
+  --s-blocked-bg: rgba(236, 74, 114, 0.15);  --s-blocked-dot: #f2718f;
+  --s-done-bg: rgba(18, 160, 106, 0.16);     --s-done-dot: #35c48c;
 
   color-scheme: dark;
 }
@@ -90,8 +142,8 @@ body {
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica,
-    'Apple Color Emoji', Arial, sans-serif;
+  font-family: var(--font-sans), ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Helvetica, 'Apple Color Emoji', Arial, sans-serif;
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -129,11 +181,12 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border-radius: var(--radius);
-  padding: 5px 10px;
+  border-radius: 999px;
+  padding: 6px 12px;
   font-size: 13px;
   font-weight: 500;
-  transition: background 90ms ease, border-color 90ms ease, opacity 90ms ease;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease,
+    opacity 120ms ease;
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
@@ -147,7 +200,8 @@ body {
 }
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
+  box-shadow: 0 2px 8px rgba(108, 92, 231, 0.28);
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
@@ -190,7 +244,7 @@ body {
 }
 .input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .input::placeholder {
   color: var(--text-tertiary);
@@ -199,14 +253,53 @@ body {
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-sm);
+}
+
+/*
+ * A recessed surface. Anything using a black tint for this disappears the
+ * moment the ground goes dark, so the token flips to a white tint there.
+ */
+.well {
+  background: var(--well);
+}
+
+/*
+ * Cards take their wash from priority, not status. Which column a card sits
+ * in already says its status, so tinting by that repeats what the layout has
+ * said — whereas urgency is the thing you want to spot from across a full
+ * board, and it is invisible in a column position.
+ */
+.pri-URGENT { background: var(--p-urgent-bg); border-color: var(--p-urgent-edge); }
+.pri-HIGH   { background: var(--p-high-bg);   border-color: var(--p-high-edge); }
+.pri-MEDIUM { background: var(--p-medium-bg); border-color: var(--p-medium-edge); }
+.pri-LOW    { background: var(--p-low-bg);    border-color: var(--p-low-edge); }
+.pri-NONE   { background: var(--bg-card); }
+
+/*
+ * Progress as discrete pips rather than a bar. A percentage on a task is a
+ * rough claim, not a measurement, and ten segments say that honestly where a
+ * smooth bar implies precision nobody has.
+ */
+.pips {
+  display: flex;
+  gap: 3px;
+}
+.pip {
+  height: 5px;
+  flex: 1;
+  border-radius: 999px;
+  background: var(--well);
+}
+.pip[data-on='true'] {
+  background: var(--pip, var(--accent));
 }
 
 .menu {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 14px;
   box-shadow: var(--shadow-lg);
   padding: 4px;
   z-index: 60;
@@ -216,8 +309,8 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 8px;
-  border-radius: 4px;
+  padding: 7px 9px;
+  border-radius: 9px;
   font-size: 13px;
   text-align: left;
   cursor: pointer;
@@ -249,8 +342,8 @@ body {
 .mention {
   background: var(--accent-soft);
   color: var(--accent);
-  border-radius: 3px;
-  padding: 0 3px;
+  border-radius: 5px;
+  padding: 0 4px;
   font-weight: 500;
   white-space: nowrap;
 }

@@ -1,5 +1,25 @@
 import type { Metadata, Viewport } from 'next';
+import { Outfit, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
+
+/*
+ * Self-hosted by next/font at build time, so there is no request to Google at
+ * runtime and no flash of a fallback face.
+ */
+const sans = Outfit({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700'],
+  variable: '--font-sans',
+  display: 'swap',
+});
+
+/* Data only — ticket numbers, counts, percentages — so columns line up. */
+const mono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  variable: '--font-mono',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'Flow — Task Manager',
@@ -13,8 +33,8 @@ export const viewport: Viewport = {
   maximumScale: 5,
   viewportFit: 'cover',
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
-    { media: '(prefers-color-scheme: dark)', color: '#191919' },
+    { media: '(prefers-color-scheme: light)', color: '#f4f4f9' },
+    { media: '(prefers-color-scheme: dark)', color: '#12121a' },
   ],
 };
 
@@ -32,7 +52,7 @@ const THEME_BOOTSTRAP = `
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>

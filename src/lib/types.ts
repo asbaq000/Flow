@@ -10,25 +10,30 @@ export const ROLES: { id: Role; label: string; rank: number; blurb: string }[] =
   { id: 'DEV',       label: 'Developer', rank: 3, blurb: 'Executes assigned work, reports progress and submits it for review.' },
 ];
 
+/*
+ * `dot` and `tint` are CSS variables rather than literals so a status keeps
+ * its meaning through a theme change — the pastels have to become deep
+ * translucent washes on a dark ground or every column turns into a headlight.
+ */
 export const STATUSES: { id: Status; label: string; color: string; dot: string; group: string }[] = [
-  { id: 'TRIAGE',            label: 'Triage',            color: '', dot: '#f59e0b', group: 'Inbox' },
-  { id: 'TODO',              label: 'To Do',             color: '', dot: '#64748b', group: 'Active' },
-  { id: 'IN_PROGRESS',       label: 'In Progress',       color: '', dot: '#3b82f6', group: 'Active' },
-  { id: 'SUBMITTED',         label: 'In Review',         color: '', dot: '#8b5cf6', group: 'Review' },
-  { id: 'CHANGES_REQUESTED', label: 'Changes Requested', color: '', dot: '#f97316', group: 'Review' },
-  { id: 'BLOCKED',           label: 'Blocked',           color: '', dot: '#f43f5e', group: 'Active' },
-  { id: 'DONE',              label: 'Done',              color: '', dot: '#10b981', group: 'Closed' },
+  { id: 'TRIAGE',            label: 'Triage',            color: '', dot: 'var(--s-triage-dot)',   group: 'Inbox' },
+  { id: 'TODO',              label: 'To Do',             color: '', dot: 'var(--s-todo-dot)',     group: 'Active' },
+  { id: 'IN_PROGRESS',       label: 'In Progress',       color: '', dot: 'var(--s-progress-dot)', group: 'Active' },
+  { id: 'SUBMITTED',         label: 'In Review',         color: '', dot: 'var(--s-review-dot)',   group: 'Review' },
+  { id: 'CHANGES_REQUESTED', label: 'Changes Requested', color: '', dot: 'var(--s-changes-dot)',  group: 'Review' },
+  { id: 'BLOCKED',           label: 'Blocked',           color: '', dot: 'var(--s-blocked-dot)',  group: 'Active' },
+  { id: 'DONE',              label: 'Done',              color: '', dot: 'var(--s-done-dot)',     group: 'Closed' },
 ];
 
 /** Statuses a Developer may set on their own task. Approval is not theirs to give. */
 export const DEV_SETTABLE: Status[] = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'SUBMITTED'];
 
 export const PRIORITIES: { id: Priority; label: string; color: string; weight: number }[] = [
-  { id: 'URGENT', label: 'Urgent', color: '#ef4444', weight: 0 },
-  { id: 'HIGH',   label: 'High',   color: '#f97316', weight: 1 },
-  { id: 'MEDIUM', label: 'Medium', color: '#eab308', weight: 2 },
-  { id: 'LOW',    label: 'Low',    color: '#3b82f6', weight: 3 },
-  { id: 'NONE',   label: 'None',   color: '#94a3b8', weight: 4 },
+  { id: 'URGENT', label: 'Urgent', color: '#ec4a72', weight: 0 },
+  { id: 'HIGH',   label: 'High',   color: '#f4693f', weight: 1 },
+  { id: 'MEDIUM', label: 'Medium', color: '#f0913a', weight: 2 },
+  { id: 'LOW',    label: 'Low',    color: '#3d8bfd', weight: 3 },
+  { id: 'NONE',   label: 'None',   color: '#9797ac', weight: 4 },
 ];
 
 export const TAG_COLORS = ['gray', 'brown', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'red'] as const;
