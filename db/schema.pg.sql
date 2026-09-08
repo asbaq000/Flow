@@ -48,8 +48,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   seq          INTEGER NOT NULL,
   title        TEXT NOT NULL DEFAULT '',
   description  TEXT NOT NULL DEFAULT '[]',
-  status       TEXT NOT NULL DEFAULT 'TRIAGE'
-                 CHECK (status IN ('TRIAGE','TODO','IN_PROGRESS','SUBMITTED','CHANGES_REQUESTED','BLOCKED','DONE')),
+  status       TEXT NOT NULL DEFAULT 'TODO'
+                 CHECK (status IN ('TODO','IN_PROGRESS','SUBMITTED','CHANGES_REQUESTED','DONE')),
   priority     TEXT NOT NULL DEFAULT 'MEDIUM'
                  CHECK (priority IN ('URGENT','HIGH','MEDIUM','LOW','NONE')),
   -- Nullable so a departed teammate can be removed without deleting the
@@ -356,6 +356,15 @@ UPDATE conversations SET org_id = (SELECT t.org_id FROM tasks t WHERE t.id = con
 UPDATE conversations SET org_id = (SELECT id FROM organizations ORDER BY created_at LIMIT 1)
   WHERE org_id IS NULL;
 
+-- A second code, held by the Team Leads, that only ever admits Developers.
+-- Who hands you the code decides what you can join as: a Manager or a Lead
+-- asks the CEO, a Developer asks their Team Lead.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS lead_invite_code TEXT;
+UPDATE organizations SET lead_invite_code = upper(substr(md5(random()::text || id), 1, 4)) || '-' ||
+                                            upper(substr(md5(random()::text || id), 5, 4))
+  WHERE lead_invite_code IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_org_lead_invite ON organizations(lead_invite_code);
+
 CREATE INDEX IF NOT EXISTS idx_users_org    ON users(org_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_org    ON tasks(org_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_org ON meetings(org_id);
@@ -363,6 +372,16 @@ CREATE INDEX IF NOT EXISTS idx_conv_org     ON conversations(org_id);
 -- A tag name is unique within an organisation, not across all of them.
 ALTER TABLE tags DROP CONSTRAINT IF EXISTS tags_name_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_org_name ON tags(org_id, name);
+
+-- Triage and Blocked are gone. Nothing sat in triage in practice — work is
+-- routed to a Lead the moment it is raised, which is what triage was for —
+-- and a blocked task is one whose blocker belongs in a progress report, not
+-- in a column of its own. Anything still in either lands in To Do.
+UPDATE tasks SET status = 'TODO' WHERE status IN ('TRIAGE', 'BLOCKED');
+ALTER TABLE tasks ALTER COLUMN status SET DEFAULT 'TODO';
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_status_check
+  CHECK (status IN ('TODO','IN_PROGRESS','SUBMITTED','CHANGES_REQUESTED','DONE'));
 
 CREATE TABLE IF NOT EXISTS counters (
   name  TEXT PRIMARY KEY,

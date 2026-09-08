@@ -26,11 +26,18 @@ export default function TaskSheetPanel({
   me,
   onClose,
   onOpenTask,
+  /**
+   * 'panel' slides in over the board — right for glancing at somebody from
+   * the Team page. 'page' fills the main area, which is what the Report
+   * section wants: a record you sit and read, not a drawer you dismiss.
+   */
+  variant = 'panel',
 }: {
   userId: string;
   me: User;
   onClose: () => void;
   onOpenTask: (id: string) => void;
+  variant?: 'panel' | 'page';
 }) {
   const [sheet, setSheet] = useState<TaskSheet | null>(null);
   const [error, setError] = useState('');
@@ -52,10 +59,11 @@ export default function TaskSheetPanel({
   }, [userId]);
 
   useEffect(() => {
+    if (variant !== 'panel') return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, variant]);
 
   /** Exports the sheet as CSV so it can go into a review or a timesheet. */
   const exportCsv = useCallback(() => {
@@ -92,25 +100,21 @@ export default function TaskSheetPanel({
 
   const entries = sheet ? (tab === 'completed' ? sheet.completed : sheet.active) : [];
 
-  return (
+  const inner = (
     <>
-      <div className="animate-fade fixed inset-0 z-50 bg-black/30" onClick={onClose} />
-
-      <aside
-        className="animate-slide fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l sm:max-w-[760px]"
-        style={{ background: 'var(--bg)' }}
-      >
-        <header className="flex h-[46px] shrink-0 items-center gap-2 border-b px-3">
+      <header className="flex h-[46px] shrink-0 items-center gap-2 border-b px-3">
+        {variant === 'panel' && (
           <button onClick={onClose} className="btn btn-ghost px-1.5" aria-label="Close task sheet">
             <X size={16} />
           </button>
-          <h2 className="flex-1 text-[14px] font-semibold">Task sheet</h2>
-          {sheet && (
-            <button onClick={exportCsv} className="btn btn-outline py-1 text-[12.5px]">
-              <Download size={13} /> Export CSV
-            </button>
-          )}
-        </header>
+        )}
+        <h2 className="flex-1 text-[14px] font-semibold">Task sheet</h2>
+        {sheet && (
+          <button onClick={exportCsv} className="btn btn-outline py-1 text-[12.5px]">
+            <Download size={13} /> Export CSV
+          </button>
+        )}
+      </header>
 
         {error ? (
           <div className="p-6">
@@ -124,7 +128,7 @@ export default function TaskSheetPanel({
           </div>
         ) : (
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-            <div className="safe-b px-4 py-5 sm:px-7">
+            <div className="safe-b mx-auto w-full max-w-5xl px-4 py-5 sm:px-7">
               {/* who */}
               <div className="flex items-center gap-3">
                 <Avatar user={sheet.user} size="xl" />
@@ -210,6 +214,21 @@ export default function TaskSheetPanel({
             </div>
           </div>
         )}
+    </>
+  );
+
+  if (variant === 'page') {
+    return <div className="flex h-full min-h-0 flex-col">{inner}</div>;
+  }
+
+  return (
+    <>
+      <div className="animate-fade fixed inset-0 z-50 bg-black/30" onClick={onClose} />
+      <aside
+        className="animate-slide fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l sm:max-w-[760px]"
+        style={{ background: 'var(--bg)' }}
+      >
+        {inner}
       </aside>
     </>
   );

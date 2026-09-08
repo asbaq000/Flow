@@ -137,7 +137,7 @@ const task = created.body.task;
 ok('auto-routed to a Team Lead, not the requested dev',
    task.assignee?.role === 'TEAM_LEAD' && task.assignee_id !== dev.user.id,
    `assignee=${task.assignee?.name} (${task.assignee?.role})`);
-ok('lands in TRIAGE', task.status === 'TRIAGE', task.status);
+ok('lands in To Do on that Lead', task.status === 'TODO', task.status);
 // The real invariant is that a number is never handed out twice — not that it
 // clears some threshold, which only held while the old seed pre-filled 12 tasks.
 {
@@ -191,7 +191,7 @@ ok('a Manager still CAN edit after triage', (await call(manager, `/api/tasks/${t
 console.log('\nRouting is absolute, assignment is Devs-only');
 const leadRaised = await call(lead, '/api/tasks', {
   method: 'POST', body: JSON.stringify({ title: 'E2E — raised by the lead' }) });
-ok('even a Team Lead\'s own task starts in TRIAGE', leadRaised.body.task.status === 'TRIAGE',
+ok('even a Team Lead\'s own task starts in To Do', leadRaised.body.task.status === 'TODO',
    leadRaised.body.task.status);
 ok('a lead-raised task is still held by a lead', leadRaised.body.task.assignee?.role === 'TEAM_LEAD',
    String(leadRaised.body.task.assignee?.role));
@@ -211,12 +211,20 @@ console.log('\nA Lead can assign as they raise it');
   });
   ok('a Lead can name the developer while creating', direct.status === 201, JSON.stringify(direct.body).slice(0, 140));
   ok('it lands on that developer', direct.body.task?.assignee_id === dev.user.id, direct.body.task?.assignee?.name);
-  ok('and starts in To Do, not Triage', direct.body.task?.status === 'TODO', direct.body.task?.status);
+  ok('and starts in To Do', direct.body.task?.status === 'TODO', direct.body.task?.status);
   ok('the response says it was assigned, not routed', direct.body.assignedDirectly === true);
   ok('the developer is told', (await call(dev, '/api/notifications')).body.notifications.some(
      (n) => n.type === 'assigned' && n.task_id === direct.body.task.id));
-  ok('the CEO can do it too', (await call(ceo, '/api/tasks', {
-    method: 'POST', body: JSON.stringify({ title: `E2E — ceo assigns ${RUN}`, assigneeId: dev.user.id }) })).body.task?.status === 'TODO');
+  // Assigning is the Team Lead's job now, and only theirs — a CEO naming a
+  // developer is routed like anybody else's request.
+  const ceoTried = await call(ceo, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — ceo assigns ${RUN}`, assigneeId: dev.user.id }) });
+  ok('a CEO naming a developer is routed, not obeyed', ceoTried.body.task?.assignee_id !== dev.user.id,
+     ceoTried.body.task?.assignee?.role);
+  ok('a CEO cannot reassign an existing task', (await call(ceo, `/api/tasks/${task.id}`, {
+    method: 'PATCH', body: JSON.stringify({ assigneeId: otherDev.user.id }) })).status === 403);
+  ok('nor can a Manager', (await call(manager, `/api/tasks/${task.id}`, {
+    method: 'PATCH', body: JSON.stringify({ assigneeId: otherDev.user.id }) })).status === 403);
   ok('naming a Manager is refused', (await call(lead, '/api/tasks', {
     method: 'POST', body: JSON.stringify({ title: 'bad', assigneeId: manager.user.id }) })).status === 400);
   ok('naming somebody from another workspace is refused', (await call(lead, '/api/tasks', {
@@ -227,7 +235,7 @@ console.log('\nA Lead can assign as they raise it');
     method: 'POST', body: JSON.stringify({ title: `E2E — manager still routes ${RUN}`, assigneeId: dev.user.id }),
   });
   ok('a Manager naming a dev is still ignored', raised.body.task?.assignee_id !== dev.user.id);
-  ok('and their task still starts in Triage', raised.body.task?.status === 'TRIAGE', raised.body.task?.status);
+  ok('and their task lands on a Lead', raised.body.task?.assignee?.role === 'TEAM_LEAD', raised.body.task?.assignee?.role);
 
   const ceoTask = (await call(ceo, '/api/tasks')).body.tasks.find((t) => t.title === `E2E — ceo assigns ${RUN}`);
   for (const id of [direct.body.task.id, raised.body.task.id, ceoTask?.id].filter(Boolean)) {
@@ -1082,6 +1090,19 @@ ok('a dev cannot open another dev\'s sheet',
 ok('a Manager cannot open a dev sheet',
    (await call(manager, `/api/users/${dev.user.id}/sheet`)).status === 403);
 
+console.log('\nWhose record is whose');
+ok('the CEO has no sheet of their own',
+   (await call(ceo, `/api/users/${ceo.user.id}/sheet`)).status === 403);
+ok('nobody else can open one for them',
+   (await call(lead, `/api/users/${ceo.user.id}/sheet`)).status === 403);
+ok('the CEO can read a Manager\'s record',
+   (await call(ceo, `/api/users/${manager.user.id}/sheet`)).status === 200);
+ok('a Team Lead cannot', (await call(lead, `/api/users/${manager.user.id}/sheet`)).status === 403);
+ok('nor can a Developer', (await call(dev, `/api/users/${manager.user.id}/sheet`)).status === 403);
+ok('a Manager still has their own', (await call(manager, `/api/users/${manager.user.id}/sheet`)).status === 200);
+ok('the CEO can read a Lead\'s record', (await call(ceo, `/api/users/${lead.user.id}/sheet`)).status === 200);
+ok('a Lead cannot read another Lead\'s', (await call(lead, `/api/users/${lead2.user.id}/sheet`)).status === 403);
+
 console.log('\nMentions are limited to people on the task');
 const members = (await call(lead, `/api/tasks/${task.id}/members`)).body.members;
 ok('the member list excludes uninvolved people',
@@ -1173,7 +1194,7 @@ console.log('\nOffboarding someone who left');
 
   const after = await call(lead, `/api/tasks/${tid}`);
   ok('the task itself survives', after.status === 200);
-  ok('it went back to triage', after.body.task?.status === 'TRIAGE', after.body.task?.status);
+  ok('it went back to a Lead\'s desk', after.body.task?.assignee?.role === 'TEAM_LEAD', after.body.task?.assignee?.role);
   ok('their comment survives', after.body.comments?.length === 1,
      String(after.body.comments?.length));
   ok('the orphaned comment reads as authorless', after.body.comments?.[0]?.author === null);
@@ -1315,6 +1336,85 @@ console.log('\nScheduling meetings');
   ok('a cancelled meeting cannot be retried',
      (await call(lead, `/api/meetings/${meeting.id}`,
        { method: 'PATCH', body: JSON.stringify({ action: 'retry' }) })).status === 400);
+}
+
+console.log('\nTriage and Blocked are gone');
+{
+  ok('a task cannot be put in Triage', (await call(lead, `/api/tasks/${task.id}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'TRIAGE' }) })).status === 400);
+  ok('nor in Blocked', (await call(lead, `/api/tasks/${task.id}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'BLOCKED' }) })).status === 400);
+  ok('nothing on the board is in either',
+     (await call(ceo, '/api/tasks')).body.tasks.every((t) => !['TRIAGE', 'BLOCKED'].includes(t.status)));
+}
+
+console.log('\nTwo codes, two kinds of seat');
+{
+  const orgNow = (await call(ceo, '/api/org')).body.org;
+  ok('the CEO sees both codes',
+     typeof orgNow?.invite_code === 'string' && typeof orgNow?.lead_invite_code === 'string',
+     JSON.stringify(orgNow));
+  const leadSees = (await call(lead, '/api/org')).body.org;
+  ok('a Team Lead sees the developer code', typeof leadSees?.lead_invite_code === 'string');
+  ok('but not the organisation code', leadSees?.invite_code === undefined);
+  const mgrSees = (await call(manager, '/api/org')).body.org;
+  ok('a Manager sees neither', mgrSees?.invite_code === undefined && mgrSees?.lead_invite_code === undefined);
+
+  const devCode = leadSees.lead_invite_code;
+  const joined = await signup(`leadinvite-${RUN}@e2e.local`, 'Lead Invited', 'DEV', { inviteCode: devCode });
+  ok('the developer code creates a Developer', joined.user.role === 'DEV', joined.user.role);
+  ok('in the same organisation', joined.user.org_id === ceo.user.org_id);
+  ok('it refuses to create a Manager', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `devcode-mgr-${RUN}@e2e.local`, password: PW, name: 'No Way',
+                           role: 'MANAGER', inviteCode: devCode }) })).status === 403);
+  ok('and refuses to create a Team Lead', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `devcode-lead-${RUN}@e2e.local`, password: PW, name: 'No Way',
+                           role: 'TEAM_LEAD', inviteCode: devCode }) })).status === 403);
+  ok('the organisation code still creates a Manager', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `orgcode-mgr-${RUN}@e2e.local`, password: PW, name: 'Org Code Manager',
+                           role: 'MANAGER', inviteCode: orgNow.invite_code }) })).status === 201);
+
+  ok('a Team Lead can mint a new developer code', (await call(lead, '/api/org', {
+    method: 'PATCH', body: JSON.stringify({ rotateLeadInvite: true }) })).status === 200);
+  ok('the old developer code stops working', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `staledev-${RUN}@e2e.local`, password: PW, name: 'Stale',
+                           role: 'DEV', inviteCode: devCode }) })).status === 403);
+  ok('a Team Lead cannot touch the organisation code', (await call(lead, '/api/org', {
+    method: 'PATCH', body: JSON.stringify({ rotateInvite: true }) })).status === 403);
+  ok('nor rename the organisation', (await call(lead, '/api/org', {
+    method: 'PATCH', body: JSON.stringify({ name: 'Lead Renamed' }) })).status === 403);
+  ok('a Manager cannot mint a developer code', (await call(manager, '/api/org', {
+    method: 'PATCH', body: JSON.stringify({ rotateLeadInvite: true }) })).status === 403);
+
+  // tidy
+  for (const email of [`leadinvite-${RUN}@e2e.local`, `orgcode-mgr-${RUN}@e2e.local`]) {
+    const who = (await call(ceo, '/api/users')).body.users.find((u) => u.email === email);
+    if (who) await call(ceo, `/api/users/${who.id}`, { method: 'DELETE' });
+  }
+}
+
+console.log('\nSigning in says which half is wrong');
+{
+  ok('an unknown email says so', (await (async () => {
+    const r = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `ghost-${RUN}@e2e.local`, password: PW }) });
+    return (await r.json()).error ?? '';
+  })()).toLowerCase().includes('email'));
+  ok('a wrong password says so', (await (async () => {
+    const r = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'manager1@e2e.local', password: 'not-the-password' }) });
+    return (await r.json()).error ?? '';
+  })()).toLowerCase().includes('password'));
+  ok('a short password is refused at signup', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `short-${RUN}@e2e.local`, password: 'seven77', name: 'Too Short',
+                           role: 'DEV', inviteCode: INVITE }) })).status === 400);
 }
 
 console.log('\nOrganisations are walls');

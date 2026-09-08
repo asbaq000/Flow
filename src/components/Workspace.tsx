@@ -31,6 +31,7 @@ import { canAssign } from '@/lib/permissions';
 import ScheduleMeetingModal from './ScheduleMeetingModal';
 import NotificationsPanel from './NotificationsPanel';
 import TaskSheetPanel from './TaskSheetPanel';
+import ReportView from './views/ReportView';
 
 export type ViewKind = 'board' | 'table' | 'list' | 'calendar';
 export type Section =
@@ -40,7 +41,7 @@ export type Section =
 /** The board scopes, offered from the "Board ▾" dropdown on the Tasks page. */
 const SCOPES: { id: Section; label: string; leadOnly?: boolean }[] = [
   { id: 'all', label: 'All tasks' },
-  { id: 'inbox', label: 'Triage inbox', leadOnly: true },
+  { id: 'inbox', label: 'Waiting on me' },
   { id: 'mine', label: 'My work' },
   { id: 'created', label: 'Raised by me' },
   { id: 'archived', label: 'Archive' },
@@ -126,6 +127,15 @@ export default function Workspace({
   useEffect(() => {
     setTheme((document.documentElement.getAttribute('data-theme') as 'light' | 'dark') ?? 'dark');
   }, []);
+
+  /** Ends the session and returns to the door, even if the request fails. */
+  const signOut = useCallback(async () => {
+    try {
+      await api.logout();
+    } finally {
+      router.replace('/login');
+    }
+  }, [router]);
 
   // Track the breakpoint so the sidebar can behave as a drawer below it.
   useEffect(() => {
@@ -361,8 +371,17 @@ export default function Workspace({
 
   const sectionTasks = useMemo(() => {
     switch (section) {
-      case 'inbox':
-        return tasks.filter((t) => t.status === 'TRIAGE');
+      case 'inbox': {
+        // What is actually waiting on you: yours, and not started yet.
+        const waiting = (t: TaskFull) =>
+          t.assignee_id === me.id && (t.status === 'TODO' || t.status === 'CHANGES_REQUESTED');
+        const result: TaskFull[] = [];
+        for (const t of tasks) {
+          if (waiting(t)) result.push(t);
+          result.push(...t.subtasks.filter(waiting));
+        }
+        return result;
+      }
       case 'mine': {
         // A subtask split off to me is my actual unit of work — surface it as
         // its own card (with its own status) rather than only as a nested row
@@ -401,7 +420,11 @@ export default function Workspace({
   const counts = useMemo(
     () => ({
       open: tasks.reduce((n, t) => n + (t.status !== 'DONE' ? 1 : 0) + t.subtasks.filter((x) => x.status !== 'DONE').length, 0),
-      inbox: tasks.filter((t) => t.status === 'TRIAGE').length,
+      inbox: tasks.reduce((n, t) => {
+        const waiting = (x: TaskFull) =>
+          x.assignee_id === me.id && (x.status === 'TODO' || x.status === 'CHANGES_REQUESTED');
+        return n + (waiting(t) ? 1 : 0) + t.subtasks.filter(waiting).length;
+      }, 0),
       mine: tasks.reduce((n, t) => {
         if (t.assignee_id === me.id && t.status !== 'DONE') n += 1;
         n += t.subtasks.filter((s) => s.assignee_id === me.id && s.status !== 'DONE').length;
@@ -457,15 +480,12 @@ export default function Workspace({
           section={section}
           counts={{ tasks: counts.open, unread: counts.unread, messages: messageUnread }}
           onSection={(s) => {
-            if (s === 'report') {
-              setSheetUserId(me.id);
-            } else {
-              setSection(s);
-              setOpenTaskId(null);
-            }
+            setSection(s);
+            setOpenTaskId(null);
             if (isMobile) setSidebarOpen(false);
           }}
           onCollapse={() => setSidebarOpen(false)}
+          onSignOut={signOut}
         />
       )}
 
@@ -740,6 +760,8 @@ export default function Workspace({
               onSignedOut={() => router.replace('/login')}
               onOpenTask={setOpenTaskId}
             />
+          ) : section === 'report' ? (
+            <ReportView me={me} users={users} onOpenTask={setOpenTaskId} />
           ) : section === 'support' ? (
             <SupportView />
           ) : section === 'meetings' ? (
@@ -992,7 +1014,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 const sectionTitle = (s: Section) =>
   ({
     all: 'All tasks',
-    inbox: 'Triage inbox',
+    inbox: 'Waiting on me',
     mine: 'My work',
     created: 'Raised by me',
     archived: 'Archive',
@@ -1045,7 +1067,7 @@ function emptyTitle(section: Section, filtered: boolean) {
   if (filtered) return 'Nothing matches those filters';
   return {
     all: 'No tasks yet',
-    inbox: 'Triage inbox is clear',
+    inbox: 'Nothing is waiting on you',
     mine: 'Nothing assigned to you',
     created: 'You have not raised anything yet',
     archived: 'Archive is empty',

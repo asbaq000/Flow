@@ -382,6 +382,44 @@ export default function TaskPanel({
                   </div>
                 )}
 
+                {/*
+                  * Assignment used to live only in the properties list, where
+                  * people looked straight past it — the single most-asked
+                  * "where do I do this?" in the app. It gets its own bar now,
+                  * above the details, and says what it does.
+                  */}
+                {abilities?.assign && !task.parent_id && (
+                  <div
+                    className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border p-2.5"
+                    style={{
+                      background: task.assignee ? 'var(--bg-subtle)' : 'var(--accent-soft)',
+                      borderColor: task.assignee ? 'var(--border)' : 'var(--accent)',
+                    }}
+                  >
+                    <span className="text-[12.5px] font-medium">
+                      {task.assignee ? (
+                        <>Working on this: <strong>{task.assignee.name}</strong></>
+                      ) : (
+                        'Nobody is working on this yet.'
+                      )}
+                    </span>
+                    <div className="ml-auto">
+                      <UserPicker
+                        users={assignableUsers}
+                        value={task.assignee_id}
+                        onChange={(assigneeId) => patch({ assigneeId })}
+                        label="Assign to a developer"
+                        pinned={task.assignee && !isAssignableRole(task.assignee.role) ? [task.assignee] : []}
+                      >
+                        <span className={`btn ${task.assignee ? 'btn-outline' : 'btn-primary'} py-1 text-[12.5px]`}>
+                          <UserRound size={13} />
+                          {task.assignee ? 'Reassign' : 'Assign to a developer'}
+                        </span>
+                      </UserPicker>
+                    </div>
+                  </div>
+                )}
+
                 {/* properties */}
                 <dl className="mt-4 space-y-0.5">
                   <Prop label="Status" icon={<Clock size={13} />}>

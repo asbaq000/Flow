@@ -150,7 +150,7 @@ export default function PeopleView({
                     <div className="text-[10.5px] text-[var(--text-tertiary)]">open</div>
                   </div>
 
-                  {canViewTaskSheet(me, person.id) && (
+                  {canViewTaskSheet(me, person) && (
                     <button
                       onClick={() => onOpenSheet(person.id)}
                       className="btn btn-outline py-1 text-[12.5px]"

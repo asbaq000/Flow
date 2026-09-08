@@ -157,7 +157,7 @@ export default function NewTaskModal({
             {canAssign ? (
               <>
                 Name the developer below and this starts on their desk in To Do. Leave it unassigned and it
-                waits in Triage for you to hand out.
+                waits on your desk for you to hand out.
               </>
             ) : routingLead ? (
               <>

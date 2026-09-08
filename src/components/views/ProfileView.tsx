@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Bell, BellOff, Building2, Camera, Check, Copy, Download, KeyRound, Loader2, Moon, RefreshCw, Send,
-  Sun, TrendingUp, X,
+  Bell, BellOff, Building2, Camera, Check, Copy, Download, KeyRound, Loader2, LogOut, Moon, RefreshCw,
+  Send, Sun, TrendingUp, X,
 } from 'lucide-react';
 import type { NotificationTestResult, Organization, TaskSheet, User } from '@/lib/types';
 import { api } from '@/lib/client';
@@ -133,10 +133,18 @@ export default function ProfileView({
             </p>
             <PushToggle />
             <NotificationTest />
-            <div className="mt-4 border-t pt-3">
+            <div className="mt-4 flex flex-wrap gap-2 border-t pt-3">
               <button onClick={onToggleTheme} className="btn btn-outline">
                 {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
                 {theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+              </button>
+              <button
+                onClick={async () => {
+                  try { await api.logout(); } finally { onSignedOut(); }
+                }}
+                className="btn btn-outline text-red-600"
+              >
+                <LogOut size={14} /> Sign out
               </button>
             </div>
           </section>
@@ -213,10 +221,10 @@ function PasswordCard({ onSignedOut }: { onSignedOut: () => void }) {
  */
 function OrganizationCard({ me }: { me: User }) {
   const ceo = me.role === 'CEO';
+  const lead = me.role === 'TEAM_LEAD';
   const [org, setOrg] = useState<Organization | null>(null);
   const [name, setName] = useState('');
-  const [busy, setBusy] = useState<'name' | 'rotate' | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState<'name' | 'admin' | 'lead' | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -234,23 +242,15 @@ function OrganizationCard({ me }: { me: User }) {
     } finally { setBusy(null); }
   };
 
-  const rotate = async () => {
-    if (!confirm('Mint a new invite code? The current one stops working immediately.')) return;
-    setBusy('rotate'); setError('');
+  const rotate = async (which: 'admin' | 'lead') => {
+    if (!confirm('Mint a new code? The current one stops working immediately, for everyone still holding it.')) return;
+    setBusy(which); setError('');
     try {
-      setOrg((await api.org.update({ rotateInvite: true })).org);
+      const body = which === 'admin' ? { rotateInvite: true } : { rotateLeadInvite: true };
+      setOrg((await api.org.update(body)).org);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not change the code');
     } finally { setBusy(null); }
-  };
-
-  const copy = async () => {
-    if (!org?.invite_code) return;
-    try {
-      await navigator.clipboard.writeText(org.invite_code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch { /* clipboard blocked; the code is still on screen to copy by hand */ }
   };
 
   return (
@@ -258,48 +258,103 @@ function OrganizationCard({ me }: { me: User }) {
       <h3 className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold"><Building2 size={14} /> Organisation</h3>
       {!org ? (
         <p className="text-[12.5px] text-[var(--text-tertiary)]">Loading…</p>
-      ) : ceo ? (
+      ) : (
         <div className="flex flex-col gap-3">
           <p className="text-[12.5px] text-[var(--text-secondary)]">
-            Everything here — people, tasks, meetings, messages — belongs to this organisation and is invisible to any other.
+            {ceo || lead
+              ? 'Everything here — people, tasks, meetings, messages — belongs to this organisation and is invisible to any other.'
+              : 'You are part of this organisation. Its codes are held by your CEO and your Team Leads.'}
           </p>
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="min-w-[220px] flex-1">
-              <span className="mb-1 block text-[11.5px] font-medium text-[var(--text-secondary)]">Name</span>
-              <input className="input text-[13px]" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
-            </label>
-            <button onClick={rename} disabled={busy !== null || name.trim().length < 2 || name.trim() === org.name} className="btn btn-outline">
-              {busy === 'name' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Rename
-            </button>
-          </div>
-          <div>
-            <span className="mb-1 block text-[11.5px] font-medium text-[var(--text-secondary)]">Invite code</span>
-            <div className="flex flex-wrap items-center gap-2">
-              <code className="rounded-md border px-3 py-1.5 font-mono text-[15px] font-semibold tracking-[0.14em]" style={{ background: 'var(--bg-subtle)' }}>
-                {org.invite_code}
-              </code>
-              <button onClick={copy} className="btn btn-outline">
-                {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}
-              </button>
-              <button onClick={rotate} disabled={busy !== null} className="btn btn-outline">
-                {busy === 'rotate' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} New code
+
+          {ceo ? (
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="min-w-[220px] flex-1">
+                <span className="mb-1 block text-[11.5px] font-medium text-[var(--text-secondary)]">Name</span>
+                <input className="input text-[13px]" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+              </label>
+              <button onClick={rename} disabled={busy !== null || name.trim().length < 2 || name.trim() === org.name} className="btn btn-outline">
+                {busy === 'name' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Rename
               </button>
             </div>
-            <p className="mt-1.5 text-[12px] text-[var(--text-tertiary)]">
-              Give this to anyone joining. They enter it on the signup form, pick their role, and land in your organisation. A new code shuts the old one out.
-            </p>
-          </div>
+          ) : (
+            <p className="text-[15px] font-semibold">{org.name}</p>
+          )}
+
+          {/*
+            * Two codes, because who hands you one decides what you can join
+            * as. A Lead can bring their own developers in without being able
+            * to mint a Manager, and the CEO keeps the seat that can.
+            */}
+          {ceo && (
+            <CodeRow
+              label="Organisation code"
+              code={org.invite_code}
+              blurb="For a Manager or a Team Lead. It also works for a Developer."
+              busy={busy === 'admin'}
+              disabled={busy !== null}
+              onRotate={() => rotate('admin')}
+            />
+          )}
+          {(ceo || lead) && (
+            <CodeRow
+              label="Developer code"
+              code={org.lead_invite_code}
+              blurb={
+                ceo
+                  ? 'What your Team Leads hand to their developers. It only ever creates a Developer.'
+                  : 'Give this to a developer joining your team. It only ever creates a Developer — a Manager or Team Lead seat comes from the CEO.'
+              }
+              busy={busy === 'lead'}
+              disabled={busy !== null}
+              onRotate={() => rotate('lead')}
+            />
+          )}
+
           {error && <p className="text-[12px] text-red-600">{error}</p>}
-        </div>
-      ) : (
-        <div>
-          <p className="text-[15px] font-semibold">{org.name}</p>
-          <p className="mt-0.5 text-[12.5px] text-[var(--text-secondary)]">
-            You are part of this organisation. Your CEO holds the invite code for bringing new people in.
-          </p>
         </div>
       )}
     </section>
+  );
+}
+
+/** One invite code: read it, copy it, or replace it. */
+function CodeRow({
+  label, code, blurb, busy, disabled, onRotate,
+}: {
+  label: string;
+  code: string | undefined;
+  blurb: string;
+  busy: boolean;
+  disabled: boolean;
+  onRotate: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  if (!code) return null;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard blocked; the code is still on screen to copy by hand */ }
+  };
+
+  return (
+    <div>
+      <span className="mb-1 block text-[11.5px] font-medium text-[var(--text-secondary)]">{label}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <code className="rounded-md border px-3 py-1.5 font-mono text-[15px] font-semibold tracking-[0.14em]" style={{ background: 'var(--bg-subtle)' }}>
+          {code}
+        </code>
+        <button onClick={copy} className="btn btn-outline">
+          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}
+        </button>
+        <button onClick={onRotate} disabled={disabled} className="btn btn-outline">
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} New code
+        </button>
+      </div>
+      <p className="mt-1.5 text-[12px] text-[var(--text-tertiary)]">{blurb}</p>
+    </div>
   );
 }
 

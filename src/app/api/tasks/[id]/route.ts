@@ -1,5 +1,6 @@
 import { currentUser } from '@/lib/auth';
 import { fail, ok, readJson } from '@/lib/api';
+import { STATUSES } from '@/lib/types';
 import { allUsers, deleteTask, getTask, getUser, listActivity, listComments, setTaskTags, updateTask } from '@/lib/store';
 import {
   abilitiesFor, canArchive, canAssign, canChangeStatus, canDelete, canEditContent, canEditPriority,
@@ -68,6 +69,11 @@ export async function PATCH(req: Request, { params }: Ctx) {
     if (body.description !== undefined) patch.description = body.description;
   }
   if (body.status !== undefined) {
+    // A status that is not in the model at all is a malformed request, not a
+    // permission one — Triage and Blocked used to exist and old clients ask.
+    if (!STATUSES.some((s) => s.id === body.status)) {
+      return fail(`There is no "${String(body.status)}" status`, 400);
+    }
     if (!canChangeStatus(user, task)) return fail('Only the assignee or a Team Lead can move this task', 403);
     // A developer drives their own work up to SUBMITTED — closing it is a
     // review decision, taken through /review, not a self-declaration.
@@ -99,7 +105,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
 
     patch.assignee_id = body.assigneeId;
     // Picking up a triaged task moves it into the active board automatically.
-    if (body.assigneeId && task.status === 'TRIAGE' && body.status === undefined) patch.status = 'TODO';
+
   }
   if (body.dueDate !== undefined) {
     if (!canEditContent(user, task)) return fail('You cannot edit this task', 403);

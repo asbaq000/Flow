@@ -2,7 +2,7 @@
 
 import {
   Activity, BarChart3, CalendarDays, ChevronRight, ChevronsLeft, ClipboardList, LayoutList,
-  LifeBuoy, MessageSquare, Settings, Users2,
+  LifeBuoy, LogOut, MessageSquare, Settings, Users2,
 } from 'lucide-react';
 import type { User } from '@/lib/types';
 import type { Section } from './Workspace';
@@ -18,6 +18,7 @@ interface Props {
   counts: { tasks: number; unread: number; messages: number };
   onSection: (s: Section) => void;
   onCollapse: () => void;
+  onSignOut: () => void;
 }
 
 interface Item {
@@ -33,7 +34,9 @@ interface Item {
  * Where the reference had entries Flow has no equivalent for (Products,
  * Clients) they are left out rather than left dead.
  */
-export default function Sidebar({ floating = false, me, orgName, section, counts, onSection, onCollapse }: Props) {
+export default function Sidebar({
+  floating = false, me, orgName, section, counts, onSection, onCollapse, onSignOut,
+}: Props) {
   const top: Item[] = [
     { id: 'all', label: 'Tasks', icon: <LayoutList size={16} />, badge: counts.tasks },
     { id: 'activity', label: 'Activities', icon: <Activity size={16} />, badge: counts.unread },
@@ -132,19 +135,31 @@ export default function Sidebar({ floating = false, me, orgName, section, counts
         <div className="mt-5">{foot.map(render)}</div>
       </nav>
 
-      {/* account */}
-      <button
-        onClick={() => onSection('profile')}
-        className="safe-b m-2 flex items-center gap-2.5 rounded-2xl border p-2.5 text-left transition-colors hover:bg-[var(--bg-hover)]"
+      {/* account — and the way out, which has to be somewhere you can see it */}
+      <div
+        className="safe-b m-2 flex items-center gap-1 rounded-2xl border p-1.5"
         style={{ background: 'var(--bg-card)' }}
       >
-        <Avatar user={me} size="md" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-semibold leading-tight">{me.name}</span>
-          <span className="block truncate text-[11px] leading-tight text-[var(--text-tertiary)]">{me.email}</span>
-        </span>
-        <ChevronRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-      </button>
+        <button
+          onClick={() => onSection('profile')}
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl p-1 text-left transition-colors hover:bg-[var(--bg-hover)]"
+        >
+          <Avatar user={me} size="md" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-semibold leading-tight">{me.name}</span>
+            <span className="block truncate text-[11px] leading-tight text-[var(--text-tertiary)]">{me.email}</span>
+          </span>
+          <ChevronRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+        </button>
+        <button
+          onClick={onSignOut}
+          className="shrink-0 rounded-xl p-2 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-red-600"
+          title="Sign out"
+          aria-label="Sign out"
+        >
+          <LogOut size={15} />
+        </button>
+      </div>
     </aside>
   );
 }

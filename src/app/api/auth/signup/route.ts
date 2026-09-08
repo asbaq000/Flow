@@ -3,12 +3,17 @@ import { one, run } from '@/lib/pg';
 import { createOrganization, findOrganizationByInvite, firstOrganization, getUser, invalidateUserCache } from '@/lib/store';
 import { fail, isValidEmail, ok, readJson } from '@/lib/api';
 import crypto from 'node:crypto';
+import { CODE_ROLES } from '@/lib/types';
 import type { Role } from '@/lib/types';
 
 const AVATAR_COLORS = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6'];
 
 // Self-signup covers the working roles; CEO comes from founding an organisation.
 const VALID_ROLES: Role[] = ['MANAGER', 'TEAM_LEAD', 'DEV'];
+
+const ROLE_LABEL: Record<Role, string> = {
+  CEO: 'CEO', MANAGER: 'Manager', TEAM_LEAD: 'Team Lead', DEV: 'Developer',
+};
 
 interface Body {
   email?: string;
@@ -59,10 +64,19 @@ export async function POST(req: Request) {
     orgId = org.id;
     finalRole = 'CEO';
   } else if (inviteCode.trim()) {
-    const org = await findOrganizationByInvite(inviteCode.trim());
-    if (!org) return fail('That invite code is not valid', 403);
+    const match = await findOrganizationByInvite(inviteCode.trim());
+    if (!match) return fail('That invite code is not valid', 403);
     if (!VALID_ROLES.includes(role)) return fail('Pick a valid role');
-    orgId = org.id;
+    // Which code you were given is what decides the seat you can take. A Team
+    // Lead's code only ever admits Developers, so a Lead can bring their own
+    // people in without being able to mint a Manager.
+    if (!CODE_ROLES[match.kind].includes(role)) {
+      return fail(
+        `That code cannot create a ${ROLE_LABEL[role]}. Ask your CEO for the organisation code if you are joining as a Manager or Team Lead.`,
+        403
+      );
+    }
+    orgId = match.org.id;
     finalRole = role;
   } else if (setupCode.trim()) {
     const expected = process.env.CEO_SETUP_CODE ?? '';

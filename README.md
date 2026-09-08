@@ -18,7 +18,16 @@ npm run dev
 
 Open <http://localhost:3000>.
 
-The workspace starts **empty**. The first person chooses **Start an organisation** on the signup form, names it, and becomes its **CEO**. Everyone else picks **Join with a code**, enters the invite code the CEO hands out (it is on the CEO's profile page, alongside a button to mint a fresh one), and chooses **Manager**, **Team Lead** or **Developer**. The CEO can adjust roles from the People page afterwards.
+The workspace starts **empty**. The first person chooses **Start an organisation** on the signup form, names it, and becomes its **CEO**. Everyone else picks **Join with a code** and enters one of two codes, because who hands you the code decides the seat you can take:
+
+| Code | Held by | Creates |
+|---|---|---|
+| **Organisation code** | the CEO | a Manager, a Team Lead or a Developer |
+| **Developer code** | every Team Lead | a Developer, and nothing else |
+
+So a Team Lead can bring their own developers in without being able to mint a Manager. Both codes live on the holder's Settings page with a button to replace them; replacing one shuts out everybody still holding the old one. The CEO can adjust roles from the Team page afterwards.
+
+A profile picture can be added while signing up, or later — it is never required.
 
 One install can hold **many organisations**. Each is a wall: its people, tasks, tags, meetings and messages are invisible to every other organisation, and task numbers count from TSK-1 inside each one.
 
@@ -51,11 +60,11 @@ Manager ──raises──▶ Team Lead ──assigns──▶ Developer
                               review
 ```
 
-Four roles, and only four. Every task starts on a Team Lead's desk — there is no path that skips triage. And nothing reaches **Done** without a Lead approving it.
+Four roles, and only four. Every task starts on a Team Lead's desk — there is no path around it. And nothing reaches **Done** without a Lead approving it.
 
-**1. A Manager raises a task.** Nobody picks an assignee — not even a Team Lead raising their own. Every task routes automatically to the Team Lead with the lightest open load and lands in **Triage**. If no Team Lead exists yet, it routes to the CEO so work is never orphaned.
+**1. A Manager raises a task.** Nobody picks an assignee except a Team Lead, who may name a Developer as they write it. Everything else routes automatically to the Team Lead with the lightest open load and lands in **To Do** on their desk — a CEO naming a developer is routed like anybody else's request. If no Team Lead exists yet, it routes to the CEO so work is never orphaned.
 
-**2. The Team Lead triages it.** They assign it **only to a Developer** — which pulls it out of Triage into To Do — or they **split** it into several pieces, each its own task assigned to its own Developer. Handing work to a Manager or another Lead is rejected by the server. The parent becomes an umbrella that tracks progress across all of them.
+**2. The Team Lead hands it out.** Assignment belongs to the Team Lead alone — not the CEO's, not a Manager's. They assign it **only to a Developer**, or **split** it into several pieces, each its own task assigned to its own Developer. Handing work to a Manager or another Lead is rejected by the server. The parent becomes an umbrella that tracks progress across all of them.
 
 **3. The Developer executes.** They report progress, move their task as far as *Submitted*, and comment (including by voice). They cannot hand work to someone else, cannot rewrite the brief, and cannot declare their own work finished.
 
@@ -70,8 +79,8 @@ Team Leads and the CEO see the whole board. Everyone else sees only tasks that t
 | Action | Manager | Developer | Team Lead | CEO |
 |---|:--:|:--:|:--:|:--:|
 | Create a task | ✅ auto-routed | ✅ auto-routed | ✅ **or assign as they write it** | ✅ same |
-| Assign / reassign | ❌ | ❌ | ✅ **Devs only** | ✅ **Devs only** |
-| Split across people | ❌ | ❌ | ✅ **Devs only** | ✅ |
+| Assign / reassign | ❌ | ❌ | ✅ **Devs only** | ❌ |
+| Split across people | ❌ | ❌ | ✅ **Devs only** | ❌ |
 | Break own task into stages | ❌ | ✅ own tasks | — | — |
 | Move status | ❌ | ✅ up to *Submitted* | ✅ any | ✅ any |
 | **Mark Done** | ❌ | ❌ | ✅ by approval, or directly | ✅ |
@@ -81,11 +90,15 @@ Team Leads and the CEO see the whole board. Everyone else sees only tasks that t
 | Edit title & description | ✅ own tasks | ❌ | ✅ any | ✅ |
 | Voice note on the brief | ✅ own tasks | ❌ | ✅ any | ✅ |
 | Comment, @mention, voice reply | ✅ visible | ✅ visible | ✅ | ✅ |
-| Archive | ✅ own, in Triage | ❌ | ✅ | ✅ |
-| Delete | ✅ own, in Triage | ❌ | ✅ | ✅ |
-| View anyone's task sheet | own only | own only | ✅ | ✅ |
+| Archive | ✅ own, in To Do | ❌ | ✅ | ✅ |
+| Delete | ✅ own, in To Do | ❌ | ✅ | ✅ |
+| View a task sheet | own only | own only | own + their Devs | everyone but themselves |
 | Change roles | ❌ | ❌ | ❌ | ✅ |
 | Remove someone's account | ❌ | ❌ | ✅ Managers & Devs | ✅ except the CEO |
+
+A **task sheet** is somebody's record of work, and the rules there are their own. The CEO has none — they carry no tasks, so there is nothing to count. A Manager's is read by the CEO and by that Manager, not by a Lead or a Developer. A Team Lead reads their Developers'. Everyone reads their own. The Report page shows whichever of these are yours to read, full width, with the others a click away.
+
+The board itself has five columns — **To Do, In Progress, In Review, Changes Requested, Done**. Triage and Blocked were removed: nothing sat in triage once work routed straight to a Lead, and a blocker belongs in a progress report where somebody reads it, not in a column where it sits.
 
 Editing the brief is deliberately narrow: **the person who raised it and the Leads above them**. A Developer who happens to have raised a task still cannot edit its description — the rule is by role, not authorship.
 
@@ -238,7 +251,7 @@ Nobody can remove themselves, and the CEO account cannot be removed at all.
 
 Removal asks you to type `remove` to confirm, then:
 
-- **Their open tasks go back to triage**, reassigned to a Team Lead, so nothing is orphaned by the departure.
+- **Their open tasks go back to a Team Lead's desk**, so nothing is orphaned by the departure.
 - **Everything they wrote is kept** — tasks they raised, comments, voice notes and progress reports all survive, credited to *“Removed user”*. Foreign keys are `ON DELETE SET NULL` rather than `CASCADE` precisely so offboarding never erases the record of what someone did.
 - Their login and all sessions are destroyed immediately.
 
@@ -306,7 +319,7 @@ The app talks to PostgreSQL. Locally that is **PGlite**, an embedded Postgres th
 
 **4. Deploy.** The schema creates itself on first request — every statement is `CREATE TABLE IF NOT EXISTS`, so there is no migration step to run and no way to double-apply it.
 
-**5. Start your organisation.** Visit your URL, choose **Sign up** → **Start an organisation**, and name it. That account becomes the CEO. Everyone else joins with the invite code from your profile page, as Manager, Team Lead or Developer.
+**5. Start your organisation.** Visit your URL, choose **Sign up** → **Start an organisation**, and name it. That account becomes the CEO. Everyone else joins with a code from Settings — the organisation code for a Manager or Team Lead, the developer code your Team Leads hand out for everyone else.
 
 ### What to watch on the free tier
 
@@ -354,7 +367,8 @@ src/components/          UI, incl. BlockEditor, VoiceNotes, ProgressPanel,
 - Task links are restricted to `http`/`https` on **both** the create and add-link paths, so `javascript:` URLs can't be stored.
 - Every permission check runs server-side. The UI hiding a button is a convenience, not the control.
 - The workspace refuses to demote its last remaining CEO.
-- The CEO seat comes from founding an organisation, never from registering first. Joining one needs its invite code, which the CEO can replace at any moment; the legacy setup code is compared in constant time.
+- The CEO seat comes from founding an organisation, never from registering first. Joining one needs a code, and the code decides the role: a Team Lead's code cannot create a Manager however the request is shaped. Either code can be replaced at any moment; the legacy setup code is compared in constant time.
+- Sign-in says whether it was the email or the password that was wrong. That is a deliberate trade — it means the form can be used to check whether an address has an account here, which for a workspace whose members already know each other is worth an error that says what to fix.
 - Every read and write is scoped to the signed-in person's organisation. A task, person, meeting or conversation id from another organisation answers as if it did not exist.
 - Account removal is authority-checked server-side: a Team Lead cannot remove another Lead, nobody can remove the CEO, and nobody can remove themselves.
 - Password reset tokens are single-use, expire after an hour, and invalidate every existing session when redeemed.

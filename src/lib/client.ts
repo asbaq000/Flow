@@ -317,7 +317,7 @@ export const api = {
   },
   org: {
     get: () => request<{ org: Organization }>('/api/org'),
-    update: (body: { name?: string; rotateInvite?: boolean }) =>
+    update: (body: { name?: string; rotateInvite?: boolean; rotateLeadInvite?: boolean }) =>
       request<{ org: Organization }>('/api/org', { method: 'PATCH', body: JSON.stringify(body) }),
   },
   push: {

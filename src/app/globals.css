@@ -278,6 +278,33 @@ body {
 .pri-NONE   { background: var(--bg-card); }
 
 /*
+ * A board of one colour is a board you have to read word by word. So every
+ * task keeps a wash of its own, picked from its id and therefore the same on
+ * every screen and after every reload — it is a handle for the eye, not
+ * decoration, which is why it must never be random per render.
+ *
+ * The hue is the task's; the border is its priority, so the thing you scan
+ * for across a full board still reads at a glance. Saturation stays low and
+ * lightness high, because these sit behind text: pale in daylight, deep and
+ * desaturated at night, and legible in both.
+ */
+.task-tint {
+  background: hsl(var(--tint-h) 74% 93%);
+  border-width: 1.5px;
+}
+[data-theme='dark'] .task-tint {
+  background: hsl(var(--tint-h) 30% 17%);
+}
+/* Chips sitting on the wash need a surface of their own that survives both. */
+.task-tint .on-tint {
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-secondary);
+}
+[data-theme='dark'] .task-tint .on-tint {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/*
  * Progress as discrete pips rather than a bar. A percentage on a task is a
  * rough claim, not a measurement, and ten segments say that honestly where a
  * smooth bar implies precision nobody has.

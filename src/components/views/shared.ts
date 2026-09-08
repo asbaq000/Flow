@@ -66,3 +66,21 @@ export function fromDateInput(value: string): number | null {
   const [y, m, d] = value.split('-').map(Number);
   return new Date(y, m - 1, d, 12, 0, 0).getTime();
 }
+
+
+/**
+ * A stable hue for a task, so the same card is the same colour on every
+ * screen and after every reload. Derived from the id rather than stored:
+ * a colour nobody chose does not deserve a column in the database.
+ *
+ * Hues are pulled off a 12-step wheel with the muddy yellow-greens skipped,
+ * so two cards side by side stay easy to tell apart and none of them turns
+ * the text grey.
+ */
+const TINT_HUES = [352, 330, 300, 270, 245, 215, 190, 168, 140, 96, 42, 22];
+
+export function tintHue(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return TINT_HUES[h % TINT_HUES.length];
+}

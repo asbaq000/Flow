@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Check, Loader2 } from 'lucide-react';
+import { ArrowRight, Camera, Check, Loader2, X } from 'lucide-react';
 import { ROLES } from '@/lib/types';
 import type { Role } from '@/lib/types';
 
@@ -29,6 +29,34 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
   const [role, setRole] = useState<Role>('MANAGER');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // Optional, and never in the way: the account is created either way, and
+  // the picture is uploaded straight after with the session it just got.
+  const [picture, setPicture] = useState<File | null>(null);
+  const [preview, setPreview] = useState('');
+  const pictureRef = useRef<HTMLInputElement>(null);
+
+  const choosePicture = (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 1024 * 1024) {
+      setError('Keep the picture under 1 MB');
+      return;
+    }
+    setError('');
+    setPicture(file);
+    setPreview((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return URL.createObjectURL(file);
+    });
+  };
+
+  const clearPicture = () => {
+    setPicture(null);
+    setPreview((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return '';
+    });
+    if (pictureRef.current) pictureRef.current.value = '';
+  };
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -49,6 +77,14 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
       } catch {
         setError('Could not reach the server');
       }
+      setBusy(false);
+      return;
+    }
+
+    // Said here rather than after a round trip, because the server's answer
+    // to a six-character password is the same and a second slower.
+    if (mode === 'signup' && password.length < 8) {
+      setError('Password must be at least 8 characters');
       setBusy(false);
       return;
     }
@@ -74,6 +110,19 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
         setBusy(false);
         return;
       }
+      // The account exists and this browser is signed in, so the picture can
+      // go up now. A failure here is not worth stopping the sign-up for —
+      // it can be set from the profile page in two clicks.
+      if (mode === 'signup' && picture) {
+        try {
+          const form = new FormData();
+          form.append('file', picture, picture.name);
+          await fetch('/api/users/me/avatar', { method: 'POST', body: form });
+        } catch {
+          /* the account is made; the picture can wait */
+        }
+      }
+
       // workspace/page.tsx is force-dynamic, so push() alone re-renders it
       // with the fresh session cookie — refresh() here only risked racing
       // the navigation and re-requesting this page's RSC payload mid-compile.
@@ -153,6 +202,56 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
           </p>
 
           <form onSubmit={submit} className="mt-7 space-y-4">
+            {mode === 'signup' && (
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => pictureRef.current?.click()}
+                  className="relative grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border border-dashed transition-colors hover:border-[var(--accent)]"
+                  style={{ borderColor: preview ? 'transparent' : 'var(--border-strong)' }}
+                  aria-label="Add a profile picture"
+                >
+                  {preview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={preview} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <Camera size={17} className="text-[var(--text-tertiary)]" />
+                  )}
+                </button>
+                <div className="min-w-0">
+                  <div className="text-[13px] font-medium">Profile picture</div>
+                  <div className="text-[12px] text-[var(--text-secondary)]">
+                    Optional — {preview ? (
+                      <button type="button" onClick={clearPicture} className="text-[var(--accent)] hover:underline">
+                        remove it
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => pictureRef.current?.click()} className="text-[var(--accent)] hover:underline">
+                        add one now
+                      </button>
+                    )}, or later from your profile.
+                  </div>
+                </div>
+                {preview && (
+                  <button
+                    type="button"
+                    onClick={clearPicture}
+                    className="ml-auto shrink-0 rounded-lg p-1.5 text-[var(--text-tertiary)] hover:text-[var(--text)]"
+                    aria-label="Remove the picture"
+                  >
+                    <X size={15} />
+                  </button>
+                )}
+                <input
+                  ref={pictureRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(e) => choosePicture(e.target.files?.[0])}
+                />
+              </div>
+            )}
+
             {mode === 'signup' && (
               <Field label="Full name">
                 <input
@@ -243,7 +342,7 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
             )}
 
             {mode === 'signup' && entry === 'join' && (
-              <Field label="Invite code" hint="Your CEO has it">
+              <Field label="Invite code" hint="Ask whoever runs your team">
                 <input
                   className="input font-mono uppercase tracking-[0.12em]"
                   value={inviteCode}
@@ -253,6 +352,10 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
                   spellCheck={false}
                   required={!setupCode.trim()}
                 />
+                <p className="mt-1 text-[11.5px] text-[var(--text-tertiary)]">
+                  Joining as a Manager or Team Lead? Ask your CEO for the organisation code.
+                  Joining as a Developer? Your Team Lead has one for you.
+                </p>
               </Field>
             )}
 

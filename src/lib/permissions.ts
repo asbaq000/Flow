@@ -53,9 +53,15 @@ export function canComment(user: User, task: TaskFull): boolean {
   return canView(user, task);
 }
 
-/** Only leads and above move work between people. */
+/**
+ * Handing work to a Developer is the Team Lead's job and nobody else's.
+ *
+ * Not the CEO's and not a Manager's: a Manager raises work, the CEO oversees
+ * it, and both routing around the Lead would leave the person accountable for
+ * a developer's workload unable to see what landed on them.
+ */
 export function canAssign(user: User): boolean {
-  return isLead(user);
+  return user.role === 'TEAM_LEAD';
 }
 
 /** Work only ever flows down to a Developer. */
@@ -73,12 +79,13 @@ export function isAssignableRole(role: Role): boolean {
  */
 export function canSplit(user: User, task: TaskFull): boolean {
   if (task.parent_id) return false;
-  return isLead(user) || (isDev(user) && isAssignedTo(user, task));
+  // Splitting across people is assigning, so it follows canAssign exactly.
+  return canAssign(user) || (isDev(user) && isAssignedTo(user, task));
 }
 
 /** A Developer's split is only ever their own workload, never a handout to someone else. */
 export function canAssignPieces(user: User): boolean {
-  return isLead(user);
+  return canAssign(user);
 }
 
 /* ------------------------------------------------------------------ */
@@ -137,10 +144,10 @@ export function canPostProgress(user: User, task: TaskFull): boolean {
  */
 export function allowedStatuses(user: User, task: TaskFull): Status[] {
   if (isLead(user)) {
-    return ['TRIAGE', 'TODO', 'IN_PROGRESS', 'SUBMITTED', 'CHANGES_REQUESTED', 'BLOCKED', 'DONE'];
+    return ['TODO', 'IN_PROGRESS', 'SUBMITTED', 'CHANGES_REQUESTED', 'DONE'];
   }
   if (isDev(user) && isAssignedTo(user, task)) {
-    return ['TODO', 'IN_PROGRESS', 'BLOCKED', 'SUBMITTED'];
+    return ['TODO', 'IN_PROGRESS', 'SUBMITTED'];
   }
   return [];
 }
@@ -197,7 +204,7 @@ export function canRemoveAttachment(
 }
 
 export function canArchive(user: User, task: TaskFull): boolean {
-  return isLead(user) || (task.creator_id === user.id && task.status === 'TRIAGE');
+  return isLead(user) || (task.creator_id === user.id && task.status === 'TODO');
 }
 
 /**
@@ -207,7 +214,7 @@ export function canArchive(user: User, task: TaskFull): boolean {
  * while it is untouched in triage.
  */
 export function canDelete(user: User, task: TaskFull): boolean {
-  return isLead(user) || (task.creator_id === user.id && task.status === 'TRIAGE');
+  return isLead(user) || (task.creator_id === user.id && task.status === 'TODO');
 }
 
 /** Only the CEO reshapes the org chart. */
@@ -248,12 +255,28 @@ export function whyCannotRemove(actor: User, target: User): string | null {
  * step was ceremony: they can name the Developer as they write it.
  */
 export function canChooseAssigneeAtCreation(user: User): boolean {
-  return isLead(user);
+  return canAssign(user);
 }
 
-/** Leads and above can inspect anyone's sheet; everyone else only their own. */
-export function canViewTaskSheet(user: User, targetId: string): boolean {
-  return isLead(user) || user.id === targetId;
+/**
+ * Who may read whose record of work.
+ *
+ * The CEO has no sheet at all — they do not carry tasks, so there is nothing
+ * to count. A Manager's sheet is the CEO's business and their own, not
+ * something a Lead or a Developer can open. Below that it is the ordinary
+ * shape: a Lead reads their developers, and everybody reads themselves.
+ */
+export function canViewTaskSheet(user: User, target: Pick<User, 'id' | 'role'>): boolean {
+  if (target.role === 'CEO') return false;
+  if (isCeo(user)) return true;
+  if (target.id === user.id) return true;
+  if (target.role === 'MANAGER') return false;
+  return user.role === 'TEAM_LEAD' && target.role === 'DEV';
+}
+
+/** True when this person has a sheet of their own to look at. */
+export function hasOwnTaskSheet(user: User): boolean {
+  return user.role !== 'CEO';
 }
 
 export interface TaskAbilities {

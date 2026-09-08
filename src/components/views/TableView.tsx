@@ -19,7 +19,7 @@ interface Props {
 }
 
 const STATUS_ORDER: Status[] = [
-  'TRIAGE', 'TODO', 'IN_PROGRESS', 'CHANGES_REQUESTED', 'SUBMITTED', 'BLOCKED', 'DONE',
+  'TODO', 'IN_PROGRESS', 'CHANGES_REQUESTED', 'SUBMITTED', 'DONE',
 ];
 
 export default function TableView({ tasks, users, me, onOpen, onUpdate }: Props) {

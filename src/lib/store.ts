@@ -264,7 +264,7 @@ export async function createTask(
     [
       actor.org_id, id, seq, title,
       input.description ?? '[]',
-      input.status ?? 'TRIAGE',
+      input.status ?? 'TODO',
       input.priority ?? 'MEDIUM',
       actor.id,
       assignee ?? null,
@@ -432,7 +432,7 @@ export async function splitTask(
        VALUES (?,?,?,?,'[]',?,?,?,?,?,?,?,0,?,0,?,?)`,
       [
         parent.org_id, id, seq, title,
-        piece.assigneeId ? 'TODO' : 'TRIAGE',
+        'TODO',
         parent.priority, actor.id, piece.assigneeId ?? null, parentId,
         parent.due_date, piece.estimate ?? null, basePos + (i + 1) * 1000, now, now,
       ]
@@ -455,7 +455,7 @@ export async function splitTask(
   await logActivity(parentId, actor.id, 'split', { count: created });
   // The parent becomes a container tracked through its children.
   await run(
-    `UPDATE tasks SET status = CASE WHEN status = 'TRIAGE' THEN 'IN_PROGRESS' ELSE status END,
+    `UPDATE tasks SET status = CASE WHEN status = 'TODO' THEN 'IN_PROGRESS' ELSE status END,
      updated_at = ? WHERE id = ?`,
     [Date.now(), parentId]
   );
@@ -1497,7 +1497,7 @@ export async function listPushSubscriptions(userId: string): Promise<PushSub[]> 
 /* Organisations                                                       */
 /* ------------------------------------------------------------------ */
 
-const ORG_COLS = 'id, name, invite_code, created_at';
+const ORG_COLS = 'id, name, invite_code, lead_invite_code, created_at';
 
 /** Short, unambiguous, typeable: no 0/O or 1/l, and grouped. */
 function mintInviteCode(): string {
@@ -1509,9 +1509,16 @@ function mintInviteCode(): string {
 
 export async function createOrganization(name: string): Promise<Organization> {
   const id = newId('org_');
-  const org: Organization = { id, name, invite_code: mintInviteCode(), created_at: Date.now() };
-  await run('INSERT INTO organizations (id, name, invite_code, created_at) VALUES (?,?,?,?)',
-    [org.id, org.name, org.invite_code, org.created_at]);
+  const org: Organization = {
+    id, name,
+    invite_code: mintInviteCode(),
+    lead_invite_code: mintInviteCode(),
+    created_at: Date.now(),
+  };
+  await run(
+    'INSERT INTO organizations (id, name, invite_code, lead_invite_code, created_at) VALUES (?,?,?,?,?)',
+    [org.id, org.name, org.invite_code, org.lead_invite_code, org.created_at]
+  );
   return org;
 }
 
@@ -1519,10 +1526,22 @@ export async function getOrganization(id: string): Promise<Organization | null> 
   return one<Organization>(`SELECT ${ORG_COLS} FROM organizations WHERE id = ?`, [id]);
 }
 
-export async function findOrganizationByInvite(code: string): Promise<Organization | null> {
-  return one<Organization>(
-    `SELECT ${ORG_COLS} FROM organizations WHERE upper(invite_code) = upper(?)`, [code.trim()]
+/**
+ * Finds the organisation a code belongs to, and says which of its two codes
+ * matched — because that is what decides the roles the code can create.
+ */
+export async function findOrganizationByInvite(
+  code: string
+): Promise<{ org: Organization; kind: 'admin' | 'lead' } | null> {
+  const trimmed = code.trim();
+  const org = await one<Organization>(
+    `SELECT ${ORG_COLS} FROM organizations
+     WHERE upper(invite_code) = upper(?) OR upper(lead_invite_code) = upper(?)`,
+    [trimmed, trimmed]
   );
+  if (!org) return null;
+  const kind = org.invite_code && org.invite_code.toUpperCase() === trimmed.toUpperCase() ? 'admin' : 'lead';
+  return { org, kind };
 }
 
 /** The oldest organisation — the one an upgraded install's people were adopted into. */
@@ -1536,6 +1555,10 @@ export async function renameOrganization(id: string, name: string) {
 
 export async function rotateInviteCode(id: string) {
   await run('UPDATE organizations SET invite_code = ? WHERE id = ?', [mintInviteCode(), id]);
+}
+
+export async function rotateLeadInviteCode(id: string) {
+  await run('UPDATE organizations SET lead_invite_code = ? WHERE id = ?', [mintInviteCode(), id]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2081,7 +2104,7 @@ export async function removeUser(actor: User, targetId: string): Promise<Removal
 
   for (const task of open) {
     await run(
-      `UPDATE tasks SET assignee_id = ?, status = 'TRIAGE', updated_at = ? WHERE id = ?`,
+      `UPDATE tasks SET assignee_id = ?, status = 'TODO', updated_at = ? WHERE id = ?`,
       [fallback, Date.now(), task.id]
     );
     await logActivity(task.id, actor.id, 'reassigned_on_offboard', {

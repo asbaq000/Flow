@@ -14,7 +14,7 @@ import { PRIORITIES, STATUSES, docToPlain } from '@/lib/types';
 import { canAssign, canChangeStatus, canSplit } from '@/lib/permissions';
 import { Avatar, AvatarStack, PriorityBars } from '../ui';
 import type { GroupBy } from '../Workspace';
-import { dueMeta } from './shared';
+import { dueMeta, tintHue } from './shared';
 
 interface Props {
   tasks: TaskFull[];
@@ -325,15 +325,22 @@ export function TaskCard({
   const splitPeople = task.subtasks.map((s) => s.assignee).filter(Boolean) as User[];
   const note = docToPlain(task.description).split('\n').find((l) => l.trim())?.slice(0, 140);
 
+  // The wash is the task's own; the border is what its priority is telling you.
+  const priorityColor = PRIORITIES.find((p) => p.id === task.priority)!.color;
+
   return (
     <article
       onClick={onOpen}
-      className={`card pri-${task.priority} cursor-pointer p-3 transition-all hover:-translate-y-px hover:shadow-md`}
+      className="card task-tint cursor-pointer p-3 transition-all hover:-translate-y-px hover:shadow-md"
+      style={{
+        '--tint-h': `${tintHue(task.id)}`,
+        borderColor: priorityColor,
+      } as React.CSSProperties}
     >
       {task.tags.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1">
           {task.tags.slice(0, 3).map((t) => (
-            <span key={t.id} className="rounded-md px-1.5 py-px text-[10.5px] font-medium" style={{ background: 'rgba(255,255,255,0.65)', color: 'var(--text-secondary)' }}>
+            <span key={t.id} className="on-tint rounded-md px-1.5 py-px text-[10.5px] font-medium">
               #{t.name}
             </span>
           ))}

@@ -1,12 +1,12 @@
 export type Role = 'CEO' | 'MANAGER' | 'TEAM_LEAD' | 'DEV';
 export type Status =
-  | 'TRIAGE' | 'TODO' | 'IN_PROGRESS' | 'SUBMITTED' | 'CHANGES_REQUESTED' | 'BLOCKED' | 'DONE';
+  | 'TODO' | 'IN_PROGRESS' | 'SUBMITTED' | 'CHANGES_REQUESTED' | 'DONE';
 export type Priority = 'URGENT' | 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE';
 
 export const ROLES: { id: Role; label: string; rank: number; blurb: string }[] = [
   { id: 'CEO',       label: 'CEO',       rank: 0, blurb: 'Full oversight of every task. The only role that changes people’s roles.' },
   { id: 'MANAGER',   label: 'Manager',   rank: 1, blurb: 'Raises work. Every task they create routes to a Team Lead for triage.' },
-  { id: 'TEAM_LEAD', label: 'Team Lead', rank: 2, blurb: 'Triages the inbox, assigns and splits work, reviews what Devs submit.' },
+  { id: 'TEAM_LEAD', label: 'Team Lead', rank: 2, blurb: 'The only role that assigns work. Splits it, and reviews what Devs submit.' },
   { id: 'DEV',       label: 'Developer', rank: 3, blurb: 'Executes assigned work, reports progress and submits it for review.' },
 ];
 
@@ -16,17 +16,15 @@ export const ROLES: { id: Role; label: string; rank: number; blurb: string }[] =
  * translucent washes on a dark ground or every column turns into a headlight.
  */
 export const STATUSES: { id: Status; label: string; color: string; dot: string; group: string }[] = [
-  { id: 'TRIAGE',            label: 'Triage',            color: '', dot: 'var(--s-triage-dot)',   group: 'Inbox' },
   { id: 'TODO',              label: 'To Do',             color: '', dot: 'var(--s-todo-dot)',     group: 'Active' },
   { id: 'IN_PROGRESS',       label: 'In Progress',       color: '', dot: 'var(--s-progress-dot)', group: 'Active' },
   { id: 'SUBMITTED',         label: 'In Review',         color: '', dot: 'var(--s-review-dot)',   group: 'Review' },
   { id: 'CHANGES_REQUESTED', label: 'Changes Requested', color: '', dot: 'var(--s-changes-dot)',  group: 'Review' },
-  { id: 'BLOCKED',           label: 'Blocked',           color: '', dot: 'var(--s-blocked-dot)',  group: 'Active' },
   { id: 'DONE',              label: 'Done',              color: '', dot: 'var(--s-done-dot)',     group: 'Closed' },
 ];
 
 /** Statuses a Developer may set on their own task. Approval is not theirs to give. */
-export const DEV_SETTABLE: Status[] = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'SUBMITTED'];
+export const DEV_SETTABLE: Status[] = ['TODO', 'IN_PROGRESS', 'SUBMITTED'];
 
 export const PRIORITIES: { id: Priority; label: string; color: string; weight: number }[] = [
   { id: 'URGENT', label: 'Urgent', color: '#ec4a72', weight: 0 },
@@ -42,10 +40,24 @@ export type TagColor = (typeof TAG_COLORS)[number];
 export interface Organization {
   id: string;
   name: string;
-  /** Only ever sent to the CEO. */
+  /**
+   * The CEO's code. Admits a Manager, a Team Lead or a Developer, so it is
+   * only ever sent to the CEO.
+   */
   invite_code?: string;
+  /**
+   * The Team Leads' code. Admits Developers and nothing else, so a Lead can
+   * bring their own people in without being able to mint a Manager.
+   */
+  lead_invite_code?: string;
   created_at: number;
 }
+
+/** Which roles a given invite code is allowed to create. */
+export const CODE_ROLES: Record<'admin' | 'lead', Role[]> = {
+  admin: ['MANAGER', 'TEAM_LEAD', 'DEV'],
+  lead: ['DEV'],
+};
 
 export interface User {
   id: string;

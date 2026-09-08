@@ -42,7 +42,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   /*
    * The routing rule stands for everyone who does not hold the authority to
-   * assign: the task lands on a Team Lead's desk in Triage, and only from
+   * assign: the task lands on a Team Lead's desk, and only from
    * there is it handed down. A Lead or the CEO already has that authority, so
    * when they name a Developer as they write the task it starts assigned and
    * in To Do — nobody triages their own decision. Any assignee from anyone
@@ -67,7 +67,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     {
       title: body.title,
       description: body.description,
-      status: assignee ? 'TODO' : 'TRIAGE',
+      status: 'TODO',
       priority: body.priority ?? 'MEDIUM',
       assigneeId: landedOn?.id ?? null,
       parentId: body.parentId ?? null,
