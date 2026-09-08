@@ -5,7 +5,8 @@ import { Info, Link2, Loader2, Mic, Paperclip, Plus, X } from 'lucide-react';
 import type { Block, Priority, Tag, TaskFull, User } from '@/lib/types';
 import { MAX_ATTACHMENT_BYTES, emptyDoc } from '@/lib/types';
 import { api, serializeDoc } from '@/lib/client';
-import { Modal, PriorityPicker, TagChip } from './ui';
+import { canChooseAssigneeAtCreation } from '@/lib/permissions';
+import { Modal, PriorityPicker, TagChip, UserPicker } from './ui';
 import { VoiceRecorder } from './VoiceNotes';
 import { fileSize } from './Attachments';
 import { appendTranscriptToDescription, autoTranscribe, useTranscriber } from '@/lib/useTranscriber';
@@ -20,7 +21,11 @@ export default function NewTaskModal({
   users: User[];
   tags: Tag[];
   onClose: () => void;
-  onCreated: (task: TaskFull, routedTo: { id: string; name: string } | null) => void;
+  onCreated: (
+    task: TaskFull,
+    routedTo: { id: string; name: string } | null,
+    assignedDirectly: boolean,
+  ) => void;
 }) {
   const [title, setTitle] = useState('');
   const [doc, setDoc] = useState<Block[]>(emptyDoc());
@@ -32,11 +37,14 @@ export default function NewTaskModal({
   const [links, setLinks] = useState<{ url: string; label: string }[]>([]);
   const [showLinks, setShowLinks] = useState(false);
   const [tagIds, setTagIds] = useState<string[]>([]);
+  const [assigneeId, setAssigneeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const { transcribe } = useTranscriber();
 
-  // Routing is not a choice: it always goes to a Team Lead for triage.
+  // A Lead can name the developer here; for everyone else routing is not a choice.
+  const canAssign = canChooseAssigneeAtCreation(me);
+  const devs = users.filter((u) => u.role === 'DEV');
   const routingLead =
     users.find((u) => u.role === 'TEAM_LEAD' && u.id !== me.id) ??
     users.find((u) => u.role === 'TEAM_LEAD') ??
@@ -56,6 +64,7 @@ export default function NewTaskModal({
     setFiles([]);
     setShowLinks(false);
     setTagIds([]);
+    setAssigneeId(null);
     setError('');
   }, [open]);
 
@@ -64,10 +73,11 @@ export default function NewTaskModal({
     setBusy(true);
     setError('');
     try {
-      const { task, routedTo } = await api.tasks.create({
+      const { task, routedTo, assignedDirectly = false } = await api.tasks.create({
         title: title.trim(),
         description: serializeDoc(doc),
         priority,
+        assigneeId: canAssign ? assigneeId : undefined,
         dueDate: fromDateInput(due),
         links: links.filter((l) => l.url.trim()),
         tagIds,
@@ -98,11 +108,11 @@ export default function NewTaskModal({
       }
       if (failed.length) {
         setError(`Task created, but these files did not upload: ${failed.join(', ')}.`);
-        onCreated(task, routedTo);
+        onCreated(task, routedTo, assignedDirectly);
         return;
       }
 
-      onCreated(task, routedTo);
+      onCreated(task, routedTo, assignedDirectly);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create task');
     } finally {
@@ -137,14 +147,19 @@ export default function NewTaskModal({
           }
         }}
       >
-        {/* routing notice — the rule made visible */}
+        {/* where it lands — the rule made visible, or the choice offered */}
         <div
           className="mb-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-[12.5px]"
           style={{ background: 'var(--bg-subtle)' }}
         >
           <Info size={14} className="mt-0.5 shrink-0 text-[var(--accent)]" />
           <p className="text-[var(--text-secondary)]">
-            {routingLead ? (
+            {canAssign ? (
+              <>
+                Name the developer below and this starts on their desk in To Do. Leave it unassigned and it
+                waits in Triage for you to hand out.
+              </>
+            ) : routingLead ? (
               <>
                 This goes to <strong className="text-[var(--text)]">{routingLead.name}</strong> for triage. Only a Team
                 Lead assigns work onward, and only to a developer.
@@ -183,6 +198,17 @@ export default function NewTaskModal({
           <Field label="Priority">
             <PriorityPicker value={priority} onChange={setPriority} />
           </Field>
+
+          {canAssign && (
+            <Field label="Assign to">
+              <UserPicker
+                users={devs}
+                value={assigneeId}
+                onChange={setAssigneeId}
+                label="Assign to a developer"
+              />
+            </Field>
+          )}
 
           <Field label="Due date">
             <input

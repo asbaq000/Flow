@@ -27,6 +27,7 @@ import ActivityView from './views/ActivityView';
 import TaskPanel from './TaskPanel';
 import NewTaskModal from './NewTaskModal';
 import SplitModal from './SplitModal';
+import { canAssign } from '@/lib/permissions';
 import ScheduleMeetingModal from './ScheduleMeetingModal';
 import NotificationsPanel from './NotificationsPanel';
 import TaskSheetPanel from './TaskSheetPanel';
@@ -482,17 +483,12 @@ export default function Workspace({
             <div className="truncate text-[14px] font-semibold">{me.name}</div>
           </div>
 
-          <button
-            onClick={() => setShowSearch(true)}
-            className="mx-auto hidden w-full max-w-[420px] items-center gap-2 rounded-full border px-3.5 py-1.5 text-left text-[13px] text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] md:flex"
-            style={{ background: 'var(--bg-input)' }}
-          >
-            <Search size={14} />
-            <span className="flex-1">Find something</span>
-            <kbd className="rounded-md border px-1.5 font-mono text-[10.5px]">Ctrl K</kbd>
-          </button>
-
-          <button onClick={() => setSection('support')} className="btn btn-ghost ml-auto px-1.5 md:ml-0" aria-label="Help">
+          {/*
+            No search field up here: the board has its own, one click away in
+            the toolbar, and Ctrl+K still opens it from anywhere. Two search
+            boxes on one screen is one too many.
+          */}
+          <button onClick={() => setSection('support')} className="btn btn-ghost ml-auto px-1.5" aria-label="Help">
             <HelpCircle size={17} />
           </button>
           {/* notifications */}
@@ -843,15 +839,17 @@ export default function Workspace({
         users={users}
         tags={tags}
         onClose={() => setNewTaskOpen(false)}
-        onCreated={(task, routedTo) => {
+        onCreated={(task, routedTo, assignedDirectly) => {
           // The created task is already in the response — painting it locally
           // is instant, and the SSE echo refreshes the rest of the board.
           patchTaskLocal(task);
           setNewTaskOpen(false);
           flash(
-            routedTo && task.assignee_id === routedTo.id
-              ? `Task routed to ${routedTo.name} for triage`
-              : 'Task created'
+            !routedTo || task.assignee_id !== routedTo.id
+              ? 'Task created'
+              : assignedDirectly
+                ? `Task assigned to ${routedTo.name}`
+                : `Task routed to ${routedTo.name} for triage`
           );
         }}
       />
@@ -859,14 +857,16 @@ export default function Workspace({
       {splitTask && (
         <SplitModal
           task={splitTask}
+          me={me}
           users={users}
+          canAssign={canAssign(me)}
           onClose={() => setSplitTask(null)}
           onSplit={(updated) => {
             patchTaskLocal(updated);
             setSplitTask(null);
             // The detail panel holds its own copy — make it pick up the new subtasks.
             setPanelReloadToken((n) => n + 1);
-            flash('Work split across the team');
+            flash(canAssign(me) ? 'Work split across the team' : 'Broken into stages you can hand in one by one');
             refresh();
           }}
         />

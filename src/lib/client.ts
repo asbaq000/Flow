@@ -49,12 +49,18 @@ export const api = {
       title: string;
       description?: string;
       priority?: Priority;
+      /** Leads only — anyone else's task routes to a Lead for triage. */
+      assigneeId?: string | null;
       parentId?: string | null;
       dueDate?: number | null;
       links?: { url: string; label?: string }[];
       tagIds?: string[];
     }) =>
-      request<{ task: TaskFull; routedTo: { id: string; name: string } | null }>('/api/tasks', {
+      request<{
+        task: TaskFull;
+        routedTo: { id: string; name: string } | null;
+        assignedDirectly?: boolean;
+      }>('/api/tasks', {
         method: 'POST',
         body: JSON.stringify(body),
       }),

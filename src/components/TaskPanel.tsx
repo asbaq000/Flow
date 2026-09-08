@@ -304,7 +304,7 @@ export default function TaskPanel({
 
               {abilities?.split && !task.subtasks.length && (
                 <button onClick={() => onSplit(task)} className="btn btn-outline py-1 text-[12.5px]">
-                  <Split size={13} /> Split
+                  <Split size={13} /> {abilities.assignPieces ? 'Split' : 'Break into stages'}
                 </button>
               )}
 

@@ -63,8 +63,22 @@ export function isAssignableRole(role: Role): boolean {
   return role === 'DEV';
 }
 
+/**
+ * Splitting is two different acts wearing one name.
+ *
+ * A Lead splits work *across* people. A Developer splits their own task *for
+ * themselves* — frontend today, backend tomorrow, deployment after that — so
+ * each piece can be handed in on its own instead of one lump at the end.
+ * Either way a piece is not split again: one level is a plan, two is a maze.
+ */
 export function canSplit(user: User, task: TaskFull): boolean {
-  return isLead(user) && !task.parent_id;
+  if (task.parent_id) return false;
+  return isLead(user) || (isDev(user) && isAssignedTo(user, task));
+}
+
+/** A Developer's split is only ever their own workload, never a handout to someone else. */
+export function canAssignPieces(user: User): boolean {
+  return isLead(user);
 }
 
 /* ------------------------------------------------------------------ */
@@ -94,10 +108,12 @@ export function canRequestChanges(user: User, task: TaskFull): boolean {
   return isLead(user) && task.status === 'SUBMITTED';
 }
 
-/** The assigned Developer (or a lead acting for them) can hand work in. */
+/**
+ * Handing work in belongs to whoever did it. A Lead does not submit — they are
+ * the other end of that exchange, and can close a task outright anyway.
+ */
 export function canSubmitForReview(user: User, task: TaskFull): boolean {
   if (task.status === 'SUBMITTED' || task.status === 'DONE') return false;
-  if (isLead(user)) return true;
   return isDev(user) && isAssignedTo(user, task);
 }
 
@@ -105,9 +121,12 @@ export function isAssignedTo(user: User, task: TaskFull): boolean {
   return task.assignee_id === user.id || task.collaborators.some((c) => c.id === user.id);
 }
 
-/** Developers report progress on their own work; leads can log on any task. */
+/**
+ * Reporting progress is the Developer's account of their own work. A Lead has
+ * nothing to report — they read these, they do not write them.
+ */
 export function canPostProgress(user: User, task: TaskFull): boolean {
-  return isLead(user) || (isDev(user) && isAssignedTo(user, task));
+  return isDev(user) && isAssignedTo(user, task);
 }
 
 /**
@@ -222,8 +241,14 @@ export function whyCannotRemove(actor: User, target: User): string | null {
   return 'You do not have permission to remove this person.';
 }
 
-export function canChooseAssigneeAtCreation(): boolean {
-  return false;
+/**
+ * A Manager raising work does not get to choose who does it — that is the
+ * routing rule, and it is the whole point of triage. A Team Lead already holds
+ * that authority, so making them raise a task and then assign it in a second
+ * step was ceremony: they can name the Developer as they write it.
+ */
+export function canChooseAssigneeAtCreation(user: User): boolean {
+  return isLead(user);
 }
 
 /** Leads and above can inspect anyone's sheet; everyone else only their own. */
@@ -236,6 +261,8 @@ export interface TaskAbilities {
   comment: boolean;
   assign: boolean;
   split: boolean;
+  /** Whether this person's split can hand pieces to other people. */
+  assignPieces: boolean;
   status: boolean;
   allowedStatuses: Status[];
   edit: boolean;
@@ -257,6 +284,7 @@ export function abilitiesFor(user: User, task: TaskFull): TaskAbilities {
     comment: canComment(user, task),
     assign: canAssign(user),
     split: canSplit(user, task),
+    assignPieces: canAssignPieces(user),
     status: canChangeStatus(user, task),
     allowedStatuses: allowedStatuses(user, task),
     edit: canEditContent(user, task),

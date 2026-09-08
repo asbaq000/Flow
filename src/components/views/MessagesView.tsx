@@ -68,7 +68,16 @@ export default function MessagesView({
 
   const loadThread = useCallback(async (id: string) => {
     const { messages: list } = await api.conversations.open(id);
-    setMessages(list);
+    setMessages((prev) => {
+      // Nothing new: keep the same array so React does not re-render the thread
+      // (and does not yank the scroll position) three times a minute for nothing.
+      const same =
+        prev.length === list.length &&
+        prev.every((m, i) => m.id === list[i].id && m.body === list[i].body &&
+          m.edited_at === list[i].edited_at && m.deleted_at === list[i].deleted_at &&
+          m.files.length === list[i].files.length);
+      return same ? prev : list;
+    });
   }, []);
 
   const openRoom = useCallback(async (id: string) => {
@@ -110,6 +119,31 @@ export default function MessagesView({
       }
     }, [refreshRooms, loadThread, current, me.id])
   );
+
+  /*
+   * The live stream is one in-memory pub/sub per server process. On a single
+   * machine that is every tab; on Vercel each request can land on a different
+   * instance, so a message posted over there never reaches the stream held
+   * over here and the thread only moved when somebody reloaded.
+   *
+   * So the room polls. Three seconds while a conversation is open is cheap —
+   * it is one query for the list and one for the thread — and it makes the
+   * chat behave like a chat wherever it is deployed. It pauses with the tab:
+   * a backgrounded phone is not waiting on a reply it cannot see.
+   */
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return;
+      refreshRooms();
+      if (current) loadThread(current).catch(() => {});
+    };
+    const id = setInterval(tick, 3000);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [refreshRooms, loadThread, current]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });

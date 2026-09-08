@@ -69,19 +69,20 @@ Team Leads and the CEO see the whole board. Everyone else sees only tasks that t
 
 | Action | Manager | Developer | Team Lead | CEO |
 |---|:--:|:--:|:--:|:--:|
-| Create a task | ✅ auto-routed | ✅ auto-routed | ✅ auto-routed | ✅ auto-routed |
+| Create a task | ✅ auto-routed | ✅ auto-routed | ✅ **or assign as they write it** | ✅ same |
 | Assign / reassign | ❌ | ❌ | ✅ **Devs only** | ✅ **Devs only** |
 | Split across people | ❌ | ❌ | ✅ **Devs only** | ✅ |
+| Break own task into stages | ❌ | ✅ own tasks | — | — |
 | Move status | ❌ | ✅ up to *Submitted* | ✅ any | ✅ any |
-| **Mark Done** | ❌ | ❌ | ✅ via approval | ✅ |
-| Report progress | ❌ | ✅ own tasks | ✅ | ✅ |
-| Submit for review | ❌ | ✅ own tasks | ✅ | ✅ |
+| **Mark Done** | ❌ | ❌ | ✅ by approval, or directly | ✅ |
+| Report progress | ❌ | ✅ own tasks | ❌ they read these | ❌ |
+| Submit for review | ❌ | ✅ own tasks | ❌ they receive these | ❌ |
 | Approve / request changes | ❌ | ❌ | ✅ | ✅ |
 | Edit title & description | ✅ own tasks | ❌ | ✅ any | ✅ |
 | Voice note on the brief | ✅ own tasks | ❌ | ✅ any | ✅ |
 | Comment, @mention, voice reply | ✅ visible | ✅ visible | ✅ | ✅ |
 | Archive | ✅ own, in Triage | ❌ | ✅ | ✅ |
-| Delete | ✅ own, in Triage | ❌ | ❌ | ✅ |
+| Delete | ✅ own, in Triage | ❌ | ✅ | ✅ |
 | View anyone's task sheet | own only | own only | ✅ | ✅ |
 | Change roles | ❌ | ❌ | ❌ | ✅ |
 | Remove someone's account | ❌ | ❌ | ✅ Managers & Devs | ✅ except the CEO |
@@ -157,6 +158,12 @@ Every person has a **task sheet**: a full record of what they have shipped. Open
 It shows headline stats — total completed, last 7 and 30 days, median turnaround from raised-to-done, and on-time rate — then a detailed table of every task: reference, title, status, tags, whether it came from a split, when it was completed, how long it took, whether it beat its due date, and who assigned it. A second tab lists what is still in flight, with how long each has been open and what is overdue.
 
 **Export CSV** hands you the whole sheet for a review or a timesheet.
+
+### Splitting, and breaking work into stages
+
+A **Team Lead** splits a task *across* people: each piece becomes its own task on its own developer's desk, with its own documents.
+
+A **Developer** can break their own task into **stages** — frontend today, backend tomorrow, deployment after that. Every stage stays theirs (assignment is a Lead's decision, not a way to pass work sideways), and each one is submitted for review on its own, so a fortnight of work is not one lump handed in at the end. The original task stays as the umbrella over all of them. A stage is not broken up again: one level is a plan, two is a maze.
 
 ### How a Developer reports progress
 

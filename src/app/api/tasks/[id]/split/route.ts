@@ -1,7 +1,7 @@
 import { currentUser } from '@/lib/auth';
 import { fail, ok, readJson } from '@/lib/api';
 import { getTask, getUser, splitTask } from '@/lib/store';
-import { canSplit, canView, isAssignableRole } from '@/lib/permissions';
+import { canAssignPieces, canSplit, canView, isAssignableRole } from '@/lib/permissions';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -19,14 +19,25 @@ export async function POST(req: Request, { params }: Ctx) {
   if (!canView(user, task)) return fail('You do not have access to this task', 403);
   if (!canSplit(user, task)) {
     return fail(
-      task.parent_id ? 'A subtask cannot be split again' : 'Only a Team Lead can split work',
+      task.parent_id
+        ? 'A subtask cannot be split again'
+        : 'Only a Team Lead, or the developer holding this task, can split it',
       403
     );
   }
 
   const { pieces = [] } = await readJson<Body>(req);
-  const valid = pieces.filter((p) => p && typeof p.title === 'string' && p.title.trim());
+  let valid = pieces.filter((p) => p && typeof p.title === 'string' && p.title.trim());
   if (valid.length < 2) return fail('A split needs at least two pieces');
+
+  /*
+   * A developer breaking up their own task keeps every piece: the split is a
+   * plan for handing the work in stage by stage, not a way to hand it to
+   * somebody else. Assignment stays a Lead's decision.
+   */
+  if (!canAssignPieces(user)) {
+    valid = valid.map((p) => ({ ...p, assigneeId: user.id }));
+  }
 
   // Each piece is real work, so it obeys the same rule: Developers only.
   for (const piece of valid) {

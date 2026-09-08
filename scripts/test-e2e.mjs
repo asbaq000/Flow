@@ -203,6 +203,38 @@ ok('assigning to a Developer is accepted', (await call(lead, `/api/tasks/${task.
   method: 'PATCH', body: JSON.stringify({ assigneeId: dev.user.id }) })).status === 200);
 await call(ceo, `/api/tasks/${leadRaised.body.task.id}`, { method: 'DELETE' });
 
+console.log('\nA Lead can assign as they raise it');
+{
+  const direct = await call(lead, '/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify({ title: `E2E — lead assigns at creation ${RUN}`, assigneeId: dev.user.id, priority: 'LOW' }),
+  });
+  ok('a Lead can name the developer while creating', direct.status === 201, JSON.stringify(direct.body).slice(0, 140));
+  ok('it lands on that developer', direct.body.task?.assignee_id === dev.user.id, direct.body.task?.assignee?.name);
+  ok('and starts in To Do, not Triage', direct.body.task?.status === 'TODO', direct.body.task?.status);
+  ok('the response says it was assigned, not routed', direct.body.assignedDirectly === true);
+  ok('the developer is told', (await call(dev, '/api/notifications')).body.notifications.some(
+     (n) => n.type === 'assigned' && n.task_id === direct.body.task.id));
+  ok('the CEO can do it too', (await call(ceo, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — ceo assigns ${RUN}`, assigneeId: dev.user.id }) })).body.task?.status === 'TODO');
+  ok('naming a Manager is refused', (await call(lead, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: 'bad', assigneeId: manager.user.id }) })).status === 400);
+  ok('naming somebody from another workspace is refused', (await call(lead, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: 'bad', assigneeId: 'u_nobody' }) })).status === 404);
+
+  // The routing rule still holds for everyone without that authority.
+  const raised = await call(manager, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — manager still routes ${RUN}`, assigneeId: dev.user.id }),
+  });
+  ok('a Manager naming a dev is still ignored', raised.body.task?.assignee_id !== dev.user.id);
+  ok('and their task still starts in Triage', raised.body.task?.status === 'TRIAGE', raised.body.task?.status);
+
+  const ceoTask = (await call(ceo, '/api/tasks')).body.tasks.find((t) => t.title === `E2E — ceo assigns ${RUN}`);
+  for (const id of [direct.body.task.id, raised.body.task.id, ceoTask?.id].filter(Boolean)) {
+    await call(ceo, `/api/tasks/${id}`, { method: 'DELETE' });
+  }
+}
+
 console.log('\nSplitting');
 const split = await call(lead, `/api/tasks/${task.id}/split`, {
   method: 'POST',
@@ -227,6 +259,51 @@ ok('a piece aimed at a Manager is rejected', (await call(lead, `/api/tasks/${tas
     { title: 'bad piece', assigneeId: manager.user.id },
   ] }) })).status === 400);
 ok('the second dev can now see the parent', (await call(otherDev, `/api/tasks/${task.id}`)).status === 200);
+
+console.log('\nA developer breaks their own task into stages');
+{
+  const own = await call(lead, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — build the web app ${RUN}`, assigneeId: dev.user.id }),
+  });
+  const id = own.body.task.id;
+
+  ok('somebody else\u2019s task cannot be broken up',
+     (await call(otherDev, `/api/tasks/${id}/split`, { method: 'POST', body: JSON.stringify({ pieces: [
+       { title: 'a', assigneeId: null }, { title: 'b', assigneeId: null }] }) })).status === 403);
+
+  const staged = await call(dev, `/api/tasks/${id}/split`, {
+    method: 'POST',
+    body: JSON.stringify({ pieces: [
+      { title: 'Frontend', assigneeId: null },
+      { title: 'Backend', assigneeId: otherDev.user.id },
+      { title: 'Deployment', assigneeId: null },
+    ] }),
+  });
+  ok('the developer holding it can break it into stages', staged.status === 201, JSON.stringify(staged.body).slice(0, 140));
+  ok('three stages exist', staged.body.task?.subtasks?.length === 3, String(staged.body.task?.subtasks?.length));
+  ok('every stage is theirs, whoever they typed',
+     staged.body.task.subtasks.every((s2) => s2.assignee_id === dev.user.id),
+     staged.body.task.subtasks.map((s2) => s2.assignee?.name).join(', '));
+  ok('each stage starts ready to work on', staged.body.task.subtasks.every((s2) => s2.status === 'TODO'));
+
+  const [frontend, backend] = staged.body.task.subtasks;
+  const handIn = await call(dev, `/api/tasks/${frontend.id}/progress`, {
+    method: 'POST', body: JSON.stringify({ submit: true, percent: 100, doneSummary: 'Frontend is done.' }),
+  });
+  ok('one stage can be handed in on its own', handIn.status === 201, JSON.stringify(handIn.body).slice(0, 140));
+  ok('that stage is now in review', handIn.body.task?.status === 'SUBMITTED', handIn.body.task?.status);
+  ok('the others are untouched',
+     (await call(dev, `/api/tasks/${backend.id}`)).body.task?.status === 'TODO');
+  const okd = await call(lead, `/api/tasks/${frontend.id}/review`, {
+    method: 'POST', body: JSON.stringify({ decision: 'approve', note: 'Looks right.' }) });
+  ok('the lead approves that stage alone', okd.body.task?.status === 'DONE', okd.body.task?.status);
+  ok('the umbrella task is still open', (await call(dev, `/api/tasks/${id}`)).body.task?.status !== 'DONE');
+  ok('a stage cannot be broken up again',
+     (await call(dev, `/api/tasks/${backend.id}/split`, { method: 'POST', body: JSON.stringify({ pieces: [
+       { title: 'x', assigneeId: null }, { title: 'y', assigneeId: null }] }) })).status === 403);
+
+  await call(ceo, `/api/tasks/${id}`, { method: 'DELETE' });
+}
 
 console.log('\nComments, mentions, notifications');
 const comment = await call(lead, `/api/tasks/${task.id}/comments`, {
@@ -302,6 +379,15 @@ ok('signup cannot claim the retired EMPLOYEE role', (await fetch(`${BASE}/api/au
 console.log('\nProgress reporting');
 ok('a Manager cannot report progress', (await call(manager, `/api/tasks/${task.id}/progress`, {
   method: 'POST', body: JSON.stringify({ percent: 50, doneSummary: 'nope' }) })).status === 403);
+// A Lead reads these; they do not write them, and they do not hand work in —
+// they close it outright instead.
+ok('a Team Lead does not report progress either', (await call(lead, `/api/tasks/${task.id}/progress`, {
+  method: 'POST', body: JSON.stringify({ percent: 50, doneSummary: 'nope' }) })).status === 403);
+ok('nor submit work for their own review', (await call(lead, `/api/tasks/${task.id}/progress`, {
+  method: 'POST', body: JSON.stringify({ submit: true, percent: 100, doneSummary: 'nope' }) })).status === 403);
+ok('but a Lead can mark a task done outright', (await call(lead, `/api/tasks/${task.id}`, {
+  method: 'PATCH', body: JSON.stringify({ status: 'DONE' }) })).body.task?.status === 'DONE');
+await call(lead, `/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'IN_PROGRESS' }) });
 const upd = await call(dev, `/api/tasks/${task.id}/progress`, {
   method: 'POST',
   body: JSON.stringify({ percent: 45, doneSummary: 'SAML handshake works end to end.', remaining: 'Admin config screen.', hoursSpent: 6 }),
