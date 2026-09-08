@@ -42,9 +42,9 @@ export const viewport: Viewport = {
 const THEME_BOOTSTRAP = `
 (function () {
   try {
-    // Dark is the product default; only an explicit choice moves off it.
+    // Light is the product default; only an explicit choice moves off it.
     var stored = localStorage.getItem('flow-theme');
-    var theme = stored === 'light' || stored === 'dark' ? stored : 'dark';
+    var theme = stored === 'light' || stored === 'dark' ? stored : 'light';
     document.documentElement.setAttribute('data-theme', theme);
   } catch (e) {}
 })();

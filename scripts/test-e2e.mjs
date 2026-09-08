@@ -583,6 +583,156 @@ console.log('\nAttaching files');
   await call(ceo, `/api/tasks/${parent.body.task.id}`, { method: 'DELETE' });
 }
 
+/* ---------- messaging ---------- */
+console.log('\nMessaging');
+{
+  const rooms = async (sess) => (await call(sess, '/api/conversations')).body.conversations ?? [];
+
+  // Two people on a task: raised by a manager, assigned to a dev. No group.
+  const pair = await call(manager, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — two people ${RUN}` }) });
+  await call(lead, `/api/tasks/${pair.body.task.id}`, {
+    method: 'PATCH', body: JSON.stringify({ assigneeId: dev.user.id }) });
+  ok('a task with two people gets no group',
+     !(await rooms(dev)).some((c) => c.task_id === pair.body.task.id));
+
+  // Split it across two devs: raiser + two devs = three people. Group opens.
+  const split = await call(lead, `/api/tasks/${pair.body.task.id}/split`, {
+    method: 'POST',
+    body: JSON.stringify({ pieces: [
+      { title: 'Piece A', assigneeId: dev.user.id },
+      { title: 'Piece B', assigneeId: otherDev.user.id },
+    ] }),
+  });
+  ok('split went through', split.status === 201, String(split.status));
+
+  const group = (await rooms(dev)).find((c) => c.task_id === pair.body.task.id);
+  ok('a task with more than two people opens a group on its own', Boolean(group));
+  ok('it is a task group', group?.kind === 'task');
+  ok('everyone on the task is in it',
+     [manager.user.id, dev.user.id, otherDev.user.id].every((id) => group?.members.some((m) => m.id === id)),
+     group?.members.map((m) => m.name).join(', '));
+  ok('it carries the ticket number', group?.task_seq === pair.body.task.seq);
+  ok('an uninvolved manager is not in it', !(await rooms(manager2)).some((c) => c.id === group?.id));
+
+  const opened = await call(dev, `/api/conversations/${group.id}`);
+  ok('a member can open it', opened.status === 200);
+  ok('it opens with the welcome line', opened.body.messages?.[0]?.author_id === null);
+  ok('a non-member cannot open it',
+     (await call(manager2, `/api/conversations/${group.id}`)).status === 403);
+
+  const sent = await call(dev, `/api/conversations/${group.id}/messages`, {
+    method: 'POST', body: JSON.stringify({ body: `Blocked on #${pair.body.task.seq} until the API lands` }) });
+  ok('a member can send a message', sent.status === 201, JSON.stringify(sent.body).slice(0, 120));
+  ok('the message keeps the task reference in the text',
+     sent.body.message?.body.includes(`#${pair.body.task.seq}`));
+  ok('an empty message is refused',
+     (await call(dev, `/api/conversations/${group.id}/messages`, {
+       method: 'POST', body: JSON.stringify({ body: '   ' }) })).status === 400);
+  ok('a non-member cannot post',
+     (await call(manager2, `/api/conversations/${group.id}/messages`, {
+       method: 'POST', body: JSON.stringify({ body: 'hi' }) })).status === 403);
+
+  const unreadFor = async (sess) => (await rooms(sess)).find((c) => c.id === group.id)?.unread ?? -1;
+  ok('the others see it as unread', (await unreadFor(otherDev)) === 1, String(await unreadFor(otherDev)));
+  ok('the sender does not', (await unreadFor(dev)) === 0);
+  await call(otherDev, `/api/conversations/${group.id}`);
+  ok('opening it marks it read', (await unreadFor(otherDev)) === 0);
+
+  ok('the others were told in-app',
+     (await call(otherDev, '/api/notifications')).body.notifications
+       .some((n) => n.type === 'message' && n.task_id === pair.body.task.id));
+
+  // Direct conversations.
+  const dm = await call(dev, '/api/conversations', { method: 'POST', body: JSON.stringify({ userId: otherDev.user.id }) });
+  ok('a direct conversation can be opened', dm.status === 201 && dm.body.conversation?.kind === 'direct');
+  const again = await call(otherDev, '/api/conversations', { method: 'POST', body: JSON.stringify({ userId: dev.user.id }) });
+  ok('opening it from the other side finds the same one', again.body.conversation?.id === dm.body.conversation?.id);
+  ok('you cannot message yourself',
+     (await call(dev, '/api/conversations', { method: 'POST', body: JSON.stringify({ userId: dev.user.id }) })).status === 400);
+
+  // Finishing the task closes the group.
+  const pieceA = split.body.task.subtasks.find((s) => s.title === 'Piece A');
+  await call(dev, `/api/tasks/${pieceA.id}/progress`, {
+    method: 'POST', body: JSON.stringify({ submit: true, doneSummary: 'done', percent: 100 }) });
+  await call(lead, `/api/tasks/${pieceA.id}/review`, { method: 'POST', body: JSON.stringify({ decision: 'approve', note: 'ok' }) });
+  await call(lead, `/api/tasks/${pair.body.task.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'DONE' }) });
+  const closed = (await rooms(dev)).find((c) => c.id === group.id);
+  ok('approving the task closes the group', Boolean(closed?.closed_at), JSON.stringify(closed?.closed_at));
+  ok('a closed group is still readable',
+     (await call(dev, `/api/conversations/${group.id}`)).status === 200);
+  ok('but takes no more messages',
+     (await call(dev, `/api/conversations/${group.id}/messages`, {
+       method: 'POST', body: JSON.stringify({ body: 'one more' }) })).status === 400);
+
+  await call(ceo, `/api/tasks/${pair.body.task.id}`, { method: 'DELETE' });
+}
+
+/* ---------- profile ---------- */
+console.log('\nProfile');
+{
+  // A throwaway account, because changing a password signs every session out.
+  const throwaway = await signup(`profile-${RUN}@e2e.local`, 'Profile Tester', 'DEV');
+
+  ok('a short new password is refused',
+     (await call(throwaway, '/api/users/me/password', {
+       method: 'POST', body: JSON.stringify({ current: PW, next: 'short' }) })).status === 400);
+  ok('the wrong current password is refused',
+     (await call(throwaway, '/api/users/me/password', {
+       method: 'POST', body: JSON.stringify({ current: 'not-it', next: 'a-new-password-1' }) })).status === 403);
+  const changed = await call(throwaway, '/api/users/me/password', {
+    method: 'POST', body: JSON.stringify({ current: PW, next: 'a-new-password-1' }) });
+  ok('the right current password changes it', changed.status === 200, String(changed.status));
+  ok('every session is signed out afterwards',
+     (await call(throwaway, '/api/tasks')).status === 401);
+  ok('the new password signs in',
+     (await login(`profile-${RUN}@e2e.local`, 'a-new-password-1')).user.id === throwaway.user.id);
+  ok('the old one no longer does',
+     (await fetch(`${BASE}/api/auth/login`, {
+       method: 'POST', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ email: `profile-${RUN}@e2e.local`, password: PW }),
+     })).status === 401);
+
+  // Pictures.
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  const upload = async (sess, bytes, type, name) => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type }), name);
+    return fetch(`${BASE}/api/users/me/avatar`, { method: 'POST', headers: { Cookie: sess.cookie }, body: form });
+  };
+  ok('an SVG is refused as a picture — it can run script',
+     (await upload(dev, '<svg onload="alert(1)"/>', 'image/svg+xml', 'x.svg')).status === 400);
+  ok('a PNG is accepted', (await upload(dev, png, 'image/png', 'me.png')).status === 200);
+  const pic = await fetch(`${BASE}/api/users/${dev.user.id}/avatar`, { headers: { Cookie: lead.cookie } });
+  ok('the picture is served back', pic.status === 200 && pic.headers.get('content-type') === 'image/png');
+  ok('and never content-sniffed', pic.headers.get('x-content-type-options') === 'nosniff');
+  ok('somebody with no picture answers 404',
+     (await fetch(`${BASE}/api/users/${manager2.user.id}/avatar`, { headers: { Cookie: lead.cookie } })).status === 404);
+
+  // Taking your record away.
+  const csv = await fetch(`${BASE}/api/users/${dev.user.id}/export`, { headers: { Cookie: dev.cookie } });
+  ok('a developer can download their own record', csv.status === 200);
+  ok('it is a spreadsheet', (csv.headers.get('content-type') ?? '').startsWith('text/csv'));
+  const text = await csv.text();
+  ok('with a header row', text.includes('Ticket,Title,Status'));
+  ok('another developer cannot download it',
+     (await fetch(`${BASE}/api/users/${dev.user.id}/export`, { headers: { Cookie: otherDev.cookie } })).status === 403);
+  ok('a Team Lead can',
+     (await fetch(`${BASE}/api/users/${dev.user.id}/export`, { headers: { Cookie: lead.cookie } })).status === 200);
+
+  // Push, unconfigured here: honest about it rather than pretending.
+  const key = await call(dev, '/api/push/key');
+  ok('push reports whether it is set up', key.status === 200 && typeof key.body.enabled === 'boolean');
+  if (!key.body.enabled) {
+    ok('subscribing without keys is refused clearly',
+       (await call(dev, '/api/push/subscribe', {
+         method: 'POST', body: JSON.stringify({ endpoint: 'https://x', keys: { p256dh: 'a', auth: 'b' } }) })).status === 400);
+  }
+
+  await call(ceo, `/api/users/${throwaway.user.id}`, { method: 'DELETE' });
+}
+
 console.log('\nDeleting a task');
 {
   const raised = await call(manager, '/api/tasks', {

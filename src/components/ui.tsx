@@ -12,16 +12,45 @@ import type { Priority, Status, Tag, User } from '@/lib/types';
 
 const SIZES = { xs: 18, sm: 22, md: 28, lg: 36, xl: 56 } as const;
 
+/**
+ * Who has a picture, learned once from /api/users/avatars. Nobody else ever
+ * gets an <img>, so there is no request that 404s and no broken glyph while
+ * the browser finds out. A per-id version busts the cache after an upload.
+ */
+const knownAvatars = new Set<string>();
+const avatarVersion = new Map<string, number>();
+const listeners = new Set<() => void>();
+export function setKnownAvatars(ids: string[]) {
+  knownAvatars.clear();
+  ids.forEach((id) => knownAvatars.add(id));
+  listeners.forEach((fn) => fn());
+}
+export function avatarChanged(userId: string) {
+  knownAvatars.add(userId);
+  avatarVersion.set(userId, Date.now());
+  listeners.forEach((fn) => fn());
+}
+
 export function Avatar({
   user,
   size = 'sm',
   ring = false,
 }: {
-  user: Pick<User, 'name' | 'avatar_color'> | null | undefined;
+  user: (Pick<User, 'name' | 'avatar_color'> & { id?: string }) | null | undefined;
   size?: keyof typeof SIZES;
   ring?: boolean;
 }) {
   const px = SIZES[size];
+  const [, bump] = useState(0);
+  const [broken, setBroken] = useState(false);
+  // Re-render when the set of people with pictures changes.
+  useEffect(() => {
+    const fn = () => bump((n) => n + 1);
+    listeners.add(fn);
+    return () => { listeners.delete(fn); };
+  }, []);
+  const id = user?.id;
+  const showImage = Boolean(id) && !broken && knownAvatars.has(id!);
   if (!user) {
     return (
       <div
@@ -41,6 +70,20 @@ export function Avatar({
     .join('')
     .toUpperCase();
 
+  if (showImage) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={`/api/users/${id}/avatar?v=${avatarVersion.get(id!) ?? 0}`}
+        alt={user.name}
+        width={px}
+        height={px}
+        onError={() => { knownAvatars.delete(id!); setBroken(true); }}
+        className="shrink-0 rounded-full object-cover"
+        style={{ width: px, height: px, boxShadow: ring ? '0 0 0 2px var(--bg-card)' : undefined }}
+      />
+    );
+  }
   return (
     <div
       className="grid shrink-0 place-items-center rounded-full font-semibold text-white"

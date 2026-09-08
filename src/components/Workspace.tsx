@@ -4,14 +4,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Archive, Bell, CalendarDays, Check, ChevronDown, Columns3, Inbox, LayoutList, Menu, Moon,
-  Plus, Search, Settings2, Sun, Table2, Users2, Video, X,
+  HelpCircle, Plus, Search, Settings2, Sun, Table2, Users2, Video, X,
 } from 'lucide-react';
 import type { MeetingFull, Notification, Priority, Status, Tag, TaskFull, User } from '@/lib/types';
 import { PRIORITIES, STATUSES } from '@/lib/types';
 import { api } from '@/lib/client';
 import { useLiveEvents } from '@/lib/useLiveEvents';
 import { canScheduleMeeting, canSplit } from '@/lib/permissions';
-import { Avatar, Empty, Popover, roleShort } from './ui';
+import { Avatar, AvatarStack, Empty, Popover, roleShort, setKnownAvatars } from './ui';
 import Sidebar from './Sidebar';
 import BoardView from './views/BoardView';
 import TableView from './views/TableView';
@@ -19,6 +19,10 @@ import ListView from './views/ListView';
 import CalendarView from './views/CalendarView';
 import PeopleView from './views/PeopleView';
 import MeetingsView from './views/MeetingsView';
+import MessagesView from './views/MessagesView';
+import ProfileView from './views/ProfileView';
+import DashboardView from './views/DashboardView';
+import ActivityView from './views/ActivityView';
 import TaskPanel from './TaskPanel';
 import NewTaskModal from './NewTaskModal';
 import SplitModal from './SplitModal';
@@ -27,7 +31,19 @@ import NotificationsPanel from './NotificationsPanel';
 import TaskSheetPanel from './TaskSheetPanel';
 
 export type ViewKind = 'board' | 'table' | 'list' | 'calendar';
-export type Section = 'all' | 'inbox' | 'mine' | 'created' | 'archived' | 'people' | 'meetings';
+export type Section =
+  | 'all' | 'inbox' | 'mine' | 'created' | 'archived'
+  | 'activity' | 'dashboard' | 'meetings' | 'messages' | 'report' | 'people' | 'profile' | 'support';
+
+/** The board scopes, offered from the "Board ▾" dropdown on the Tasks page. */
+const SCOPES: { id: Section; label: string; leadOnly?: boolean }[] = [
+  { id: 'all', label: 'All tasks' },
+  { id: 'inbox', label: 'Triage inbox', leadOnly: true },
+  { id: 'mine', label: 'My work' },
+  { id: 'created', label: 'Raised by me' },
+  { id: 'archived', label: 'Archive' },
+];
+const BOARD_SECTIONS: Section[] = ['all', 'inbox', 'mine', 'created', 'archived'];
 export type GroupBy = 'status' | 'assignee' | 'priority';
 
 export interface Filters {
@@ -66,9 +82,20 @@ export default function Workspace({
   const [tags, setTags] = useState<Tag[]>(initialTags);
   const [notifications, setNotifications] = useState<Notification[]>(initialNotifications);
 
-  const [section, setSection] = useState<Section>(
-    me.role === 'TEAM_LEAD' || me.role === 'CEO' ? 'inbox' : 'mine'
-  );
+  const [section, setSection] = useState<Section>('all');
+  const [messageUnread, setMessageUnread] = useState(0);
+  const [messagesTaskId, setMessagesTaskId] = useState<string | null>(null);
+
+  /** A message notification belongs in the chat; everything else opens the task. */
+  const openFromNotification = (n: Notification) => {
+    if (n.type === 'message' && n.task_id) {
+      setMessagesTaskId(n.task_id);
+      setSection('messages');
+      setOpenTaskId(null);
+    } else if (n.task_id) {
+      setOpenTaskId(n.task_id);
+    }
+  };
   const [view, setView] = useState<ViewKind>('board');
   const [groupBy, setGroupBy] = useState<GroupBy>('status');
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -161,6 +188,21 @@ export default function Workspace({
     refresh();
   }, [section, refresh]);
 
+  useEffect(() => {
+    api.conversations.list()
+      .then(({ conversations }) => setMessageUnread(conversations.reduce((n, c) => n + c.unread, 0)))
+      .catch(() => {});
+    api.profile.withPictures().then(({ ids }) => setKnownAvatars(ids)).catch(() => {});
+  }, []);
+
+  // Rendered after mount so the server and the browser never disagree on the date.
+  const [today, setToday] = useState<Date | null>(null);
+  useEffect(() => { setToday(new Date()); }, []);
+  const monthName = today ? today.toLocaleDateString(undefined, { month: 'long' }) : '';
+  const todayLabel = today
+    ? `${today.toLocaleDateString(undefined, { weekday: 'long' })}, ${today.toLocaleDateString(undefined, { month: 'short' })} ${ordinal(today.getDate())}, ${today.getFullYear()}`
+    : '';
+
   // Only fetched when the section is actually open — meetings are not part of
   // the board payload, so nobody pays for them until they look.
   useEffect(() => {
@@ -191,6 +233,11 @@ export default function Workspace({
         if (event.type === 'meeting.created' || event.type === 'meeting.updated') {
           refreshMeetings();
           refreshNotifications();
+        }
+        if (event.type === 'message.added' || event.type === 'conversation.updated') {
+          api.conversations.list()
+            .then(({ conversations }) => setMessageUnread(conversations.reduce((n, c) => n + c.unread, 0)))
+            .catch(() => {});
         }
       },
       [refresh, refreshNotifications, refreshMeetings]
@@ -349,6 +396,7 @@ export default function Workspace({
 
   const counts = useMemo(
     () => ({
+      open: tasks.reduce((n, t) => n + (t.status !== 'DONE' ? 1 : 0) + t.subtasks.filter((x) => x.status !== 'DONE').length, 0),
       inbox: tasks.filter((t) => t.status === 'TRIAGE').length,
       mine: tasks.reduce((n, t) => {
         if (t.assignee_id === me.id && t.status !== 'DONE') n += 1;
@@ -390,46 +438,132 @@ export default function Workspace({
           floating={isMobile}
           me={me}
           section={section}
-          counts={counts}
+          counts={{ tasks: counts.open, unread: counts.unread, messages: messageUnread }}
           onSection={(s) => {
-            setSection(s);
-            setOpenTaskId(null);
+            if (s === 'report') {
+              setSheetUserId(me.id);
+            } else {
+              setSection(s);
+              setOpenTaskId(null);
+            }
             if (isMobile) setSidebarOpen(false);
           }}
-          onNewTask={() => {
-            setNewTaskOpen(true);
-            if (isMobile) setSidebarOpen(false);
-          }}
-          onOpenMySheet={() => {
-            setSheetUserId(me.id);
-            if (isMobile) setSidebarOpen(false);
-          }}
-          onLogout={async () => {
-            await api.logout();
-            // login/page.tsx is force-dynamic too — see the note in AuthForm's submit.
-            router.replace('/login');
-          }}
-          theme={theme}
-          onToggleTheme={toggleTheme}
           onCollapse={() => setSidebarOpen(false)}
         />
       )}
 
       <main className="flex min-w-0 flex-1 flex-col">
         {/* ---- header ---- */}
-        <header className="flex h-[46px] shrink-0 items-center gap-2 border-b px-3">
+        {/* ---- welcome bar: who, search, help, bell ---- */}
+        <div className="flex h-[58px] shrink-0 items-center gap-3 border-b px-4">
           {!sidebarOpen && (
             <button onClick={() => setSidebarOpen(true)} className="btn btn-ghost px-1.5" aria-label="Show menu">
               <Menu size={16} />
             </button>
           )}
+          <div className="min-w-0 leading-tight">
+            <div className="text-[11px] text-[var(--text-tertiary)]">Welcome,</div>
+            <div className="truncate text-[14px] font-semibold">{me.name}</div>
+          </div>
 
-          <h1 className="truncate text-[14px] font-semibold">{sectionTitle(section)}</h1>
-          <span className="hidden rounded bg-[var(--bg-active)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--text-secondary)] sm:inline">
-            {section === 'meetings' ? meetings.length : visible.length}
-          </span>
+          <button
+            onClick={() => setShowSearch(true)}
+            className="mx-auto hidden w-full max-w-[420px] items-center gap-2 rounded-full border px-3.5 py-1.5 text-left text-[13px] text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] md:flex"
+            style={{ background: 'var(--bg-input)' }}
+          >
+            <Search size={14} />
+            <span className="flex-1">Find something</span>
+            <kbd className="rounded-md border px-1.5 font-mono text-[10.5px]">Ctrl K</kbd>
+          </button>
 
-          <div className="flex-1" />
+          <button onClick={() => setSection('support')} className="btn btn-ghost ml-auto px-1.5 md:ml-0" aria-label="Help">
+            <HelpCircle size={17} />
+          </button>
+          {/* notifications */}
+          <div className="relative">
+            <button
+              onClick={() => {
+                setNotifOpen((o) => !o);
+                refreshNotifications();
+              }}
+              className="btn btn-ghost relative px-1.5"
+              title="Notifications"
+            >
+              <Bell size={15} />
+              {counts.unread > 0 && (
+                <span className="absolute right-0.5 top-0.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">
+                  {counts.unread > 9 ? '9+' : counts.unread}
+                </span>
+              )}
+            </button>
+            {notifOpen && (
+              <NotificationsPanel
+                notifications={notifications}
+                onClose={() => setNotifOpen(false)}
+                onOpenTask={(_id, n) => {
+                  openFromNotification(n);
+                  setNotifOpen(false);
+                }}
+                onMarkAll={async () => {
+                  await api.notifications.read('all');
+                  setNotifications((prev) => prev.map((n) => ({ ...n, read: 1 })));
+                }}
+                onMarkOne={async (id) => {
+                  await api.notifications.read([id]);
+                  setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: 1 } : n)));
+                }}
+              />
+            )}
+          </div>
+        </div>
+
+        <header className="flex min-h-[46px] shrink-0 items-center gap-2 border-b px-4 py-1.5">
+          {BOARD_SECTIONS.includes(section) ? (
+            <>
+              <div className="leading-tight">
+                <div className="text-[15px] font-bold">{monthName}</div>
+                <div className="text-[11px] text-[var(--text-tertiary)]">Today is {todayLabel}</div>
+              </div>
+              <span className="mx-2 hidden h-6 w-px sm:block" style={{ background: 'var(--border)' }} />
+              <Popover
+                width={200}
+                trigger={({ toggle }) => (
+                  <button onClick={toggle} className="btn btn-ghost gap-1.5 text-[13px]">
+                    <span className="font-semibold">Board</span>
+                    <span className="text-[var(--text-tertiary)]">· {SCOPES.find((x) => x.id === section)?.label}</span>
+                    <ChevronDown size={13} className="text-[var(--text-tertiary)]" />
+                  </button>
+                )}
+              >
+                {(close) => (
+                  <>
+                    {SCOPES.filter((sc) => !sc.leadOnly || me.role === 'TEAM_LEAD' || me.role === 'CEO').map((sc) => (
+                      <button key={sc.id} className="menu-item" data-active={section === sc.id} onClick={() => { setSection(sc.id); close(); }}>
+                        {sc.label}
+                        {section === sc.id && <Check size={13} className="ml-auto" />}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </Popover>
+              <span className="hidden rounded-full px-1.5 py-0.5 font-mono text-[11px] font-medium tabular-nums text-[var(--text-secondary)] sm:inline" style={{ background: 'var(--well)' }}>
+                {visible.length}
+              </span>
+              <div className="flex-1" />
+              <div className="hidden lg:block"><AvatarStack users={users} max={5} /></div>
+              <span className="mx-1 hidden h-6 w-px lg:block" style={{ background: 'var(--border)' }} />
+            </>
+          ) : (
+            <>
+              <h1 className="truncate text-[14px] font-semibold">{sectionTitle(section)}</h1>
+              {section === 'meetings' && (
+                <span className="hidden rounded-full px-1.5 py-0.5 font-mono text-[11px] font-medium text-[var(--text-secondary)] sm:inline" style={{ background: 'var(--well)' }}>
+                  {meetings.length}
+                </span>
+              )}
+              <div className="flex-1" />
+            </>
+          )}
 
           {section === 'meetings' && canScheduleMeeting(me) && (
             <button onClick={() => setScheduleOpen(true)} className="btn btn-primary py-1 text-[12.5px]">
@@ -438,7 +572,7 @@ export default function Workspace({
             </button>
           )}
 
-          {section !== 'people' && section !== 'meetings' && (
+          {BOARD_SECTIONS.includes(section) && (
             <>
               {/* view switcher */}
               <div className="flex shrink-0 items-center gap-0.5 rounded-md p-0.5" style={{ background: 'var(--bg-subtle)' }}>
@@ -546,46 +680,11 @@ export default function Workspace({
             {live === 'live' ? 'Live' : live === 'connecting' ? 'Connecting' : 'Offline'}
           </span>
 
-          {/* notifications */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                setNotifOpen((o) => !o);
-                refreshNotifications();
-              }}
-              className="btn btn-ghost relative px-1.5"
-              title="Notifications"
-            >
-              <Bell size={15} />
-              {counts.unread > 0 && (
-                <span className="absolute right-0.5 top-0.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">
-                  {counts.unread > 9 ? '9+' : counts.unread}
-                </span>
-              )}
-            </button>
-            {notifOpen && (
-              <NotificationsPanel
-                notifications={notifications}
-                onClose={() => setNotifOpen(false)}
-                onOpenTask={(id) => {
-                  setOpenTaskId(id);
-                  setNotifOpen(false);
-                }}
-                onMarkAll={async () => {
-                  await api.notifications.read('all');
-                  setNotifications((prev) => prev.map((n) => ({ ...n, read: 1 })));
-                }}
-                onMarkOne={async (id) => {
-                  await api.notifications.read([id]);
-                  setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: 1 } : n)));
-                }}
-              />
-            )}
-          </div>
+
 
           <button onClick={() => setNewTaskOpen(true)} className="btn btn-primary">
             <Plus size={14} />
-            <span className="hidden sm:inline">New</span>
+            <span className="hidden sm:inline">Create task</span>
           </button>
         </header>
 
@@ -593,6 +692,43 @@ export default function Workspace({
         <div className="min-h-0 flex-1 overflow-hidden">
           {section === 'people' ? (
             <PeopleView me={me} onChanged={() => refresh()} onOpenSheet={setSheetUserId} />
+          ) : section === 'dashboard' ? (
+            <DashboardView tasks={tasks} users={users} onOpenTask={setOpenTaskId} />
+          ) : section === 'activity' ? (
+            <ActivityView
+              notifications={notifications}
+              onOpen={openFromNotification}
+              onMarkAll={async () => { await api.notifications.read('all'); refreshNotifications(); }}
+              onMarkOne={async (id) => { await api.notifications.read([id]); refreshNotifications(); }}
+            />
+          ) : section === 'messages' ? (
+            <MessagesView
+              me={me}
+              users={users}
+              openTaskId={messagesTaskId}
+              onOpenTask={(id) => {
+                // Task links in chat carry a ticket number, not an id.
+                if (id.startsWith('seq:')) {
+                  const seq = Number(id.slice(4));
+                  const hit = tasks.flatMap((t) => [t, ...t.subtasks]).find((t) => t.seq === seq);
+                  if (hit) setOpenTaskId(hit.id);
+                  else flash(`TSK-${seq} is not on your board`);
+                } else {
+                  setOpenTaskId(id);
+                }
+              }}
+              onUnread={setMessageUnread}
+            />
+          ) : section === 'profile' ? (
+            <ProfileView
+              me={me}
+              theme={theme}
+              onToggleTheme={toggleTheme}
+              onSignedOut={() => router.replace('/login')}
+              onOpenTask={setOpenTaskId}
+            />
+          ) : section === 'support' ? (
+            <SupportView />
           ) : section === 'meetings' ? (
             <MeetingsView
               meetings={meetings}
@@ -842,9 +978,50 @@ const sectionTitle = (s: Section) =>
     mine: 'My work',
     created: 'Raised by me',
     archived: 'Archive',
-    people: 'People',
-    meetings: 'Meetings',
+    people: 'Team',
+    meetings: 'Schedule',
+    activity: 'Activities',
+    dashboard: 'Dashboard',
+    messages: 'Messages',
+    report: 'Report',
+    profile: 'Settings',
+    support: 'Support',
   })[s];
+
+const ordinal = (n: number) => {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+
+const HOW_IT_WORKS: [string, string][] = [
+  ['A Manager raises a task', "It lands in the Team Lead's triage inbox with the brief, links and any files or voice notes."],
+  ['A Team Lead assigns or splits it', 'One developer, or several pieces each with their own owner and documents.'],
+  ['Developers report progress', 'Tap the pips, say what is done and what is left, then submit for review.'],
+  ['A Team Lead approves or sends it back', "Approval marks it done and closes the task's group chat."],
+  ['Everyone is told', 'In-app, by email, by push on your phone, and in Slack if it is connected. Turn push on under Settings.'],
+  ['Meetings', 'Schedule a Google Meet from Schedule; record the call and the minutes write themselves.'],
+];
+
+function SupportView() {
+  return (
+    <div className="scroll-thin h-full overflow-y-auto">
+      <div className="mx-auto max-w-2xl px-5 py-8">
+        <h2 className="mb-1 text-[18px] font-bold">How Flow works</h2>
+        <p className="mb-5 text-[13.5px] text-[var(--text-secondary)]">The chain of command, and where things go.</p>
+        <ol className="card divide-y">
+          {HOW_IT_WORKS.map(([h, b], i) => (
+            <li key={h} className="flex gap-3 p-4">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full font-mono text-[11px] font-bold" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>{i + 1}</span>
+              <span><span className="block text-[13.5px] font-semibold">{h}</span><span className="block text-[12.5px] text-[var(--text-secondary)]">{b}</span></span>
+            </li>
+          ))}
+        </ol>
+        <p className="mt-5 text-[12px] text-[var(--text-tertiary)]">Shortcuts: <kbd className="rounded border px-1">N</kbd> new task · <kbd className="rounded border px-1">Ctrl K</kbd> search · <kbd className="rounded border px-1">Esc</kbd> close.</p>
+      </div>
+    </div>
+  );
+}
 
 function emptyTitle(section: Section, filtered: boolean) {
   if (filtered) return 'Nothing matches those filters';
@@ -854,8 +1031,7 @@ function emptyTitle(section: Section, filtered: boolean) {
     mine: 'Nothing assigned to you',
     created: 'You have not raised anything yet',
     archived: 'Archive is empty',
-    people: '',
-    meetings: '',
+    people: '', meetings: '', activity: '', dashboard: '', messages: '', report: '', profile: '', support: '',
   }[section];
 }
 

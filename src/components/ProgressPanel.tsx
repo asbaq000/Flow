@@ -161,20 +161,33 @@ export default function ProgressPanel({
       {/* ---- developer's report ---- */}
       {abilities?.postProgress && !awaitingReview && task.status !== 'DONE' && (
         <div className="mb-4 rounded-md border p-3" style={{ background: 'var(--bg-subtle)' }}>
-          <label className="mb-1 flex items-center justify-between text-[12.5px] font-medium">
+          <label className="mb-1.5 flex items-center justify-between text-[12.5px] font-medium">
             How far along is it?
-            <span className="tabular-nums text-[var(--text-secondary)]">{percent}%</span>
+            <span className="font-mono tabular-nums text-[var(--text-secondary)]">{percent}%</span>
           </label>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={percent}
-            onChange={(e) => setPercent(Number(e.target.value))}
-            className="mb-3 w-full accent-[var(--accent)]"
-            aria-label="Percent complete"
-          />
+          {/*
+            Ten pips you tap, not a slider you drag. Progress on a task is a
+            rough claim in tens, and a slider invited fiddling for a number
+            that was never that precise — plus it is a poor control on a phone.
+          */}
+          <div className="mb-3 flex gap-1" role="radiogroup" aria-label="Percent complete">
+            {Array.from({ length: 10 }, (_, i) => {
+              const value = (i + 1) * 10;
+              const on = percent >= value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={percent === value}
+                  aria-label={`${value} percent`}
+                  onClick={() => setPercent(percent === value ? value - 10 : value)}
+                  className="h-2.5 flex-1 rounded-full transition-colors"
+                  style={{ background: on ? 'var(--accent)' : 'var(--well)' }}
+                />
+              );
+            })}
+          </div>
 
           <textarea
             value={done}

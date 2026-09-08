@@ -1,0 +1,45 @@
+import { currentUser } from '@/lib/auth';
+import { fail, ok } from '@/lib/api';
+import { getAvatar, setAvatar } from '@/lib/store';
+
+type Ctx = { params: Promise<{ id: string }> };
+
+/** Raster only. An SVG is a document that can run script, not a picture. */
+const ALLOWED = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const MAX_BYTES = 1024 * 1024;
+
+export async function GET(_req: Request, { params }: Ctx) {
+  const user = await currentUser();
+  if (!user) return fail('Not signed in', 401);
+
+  const { id } = await params;
+  const avatar = await getAvatar(id);
+  if (!avatar) return fail('No picture', 404);
+
+  return new Response(new Uint8Array(avatar.data), {
+    headers: {
+      'Content-Type': avatar.mime,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=300',
+    },
+  });
+}
+
+export async function POST(req: Request, { params }: Ctx) {
+  const user = await currentUser();
+  if (!user) return fail('Not signed in', 401);
+
+  const { id } = await params;
+  if (id !== user.id && id !== 'me') return fail('You can only change your own picture', 403);
+
+  const form = await req.formData();
+  const file = form.get('file');
+  if (!(file instanceof Blob) || file.size === 0) return fail('No picture was uploaded');
+  if (file.size > MAX_BYTES) return fail('Keep the picture under 1 MB');
+
+  const mime = (file.type || '').split(';')[0].trim();
+  if (!ALLOWED.has(mime)) return fail('Use a PNG, JPEG, WebP or GIF');
+
+  await setAvatar(user.id, Buffer.from(await file.arrayBuffer()), mime);
+  return ok({ ok: true });
+}

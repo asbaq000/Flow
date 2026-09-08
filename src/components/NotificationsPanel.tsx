@@ -18,7 +18,7 @@ export default function NotificationsPanel({
 }: {
   notifications: Notification[];
   onClose: () => void;
-  onOpenTask: (taskId: string) => void;
+  onOpenTask: (taskId: string, n: Notification) => void;
   onMarkAll: () => void;
   onMarkOne: (id: string) => void;
 }) {
@@ -68,7 +68,7 @@ export default function NotificationsPanel({
               <button
                 onClick={() => {
                   if (!n.read) onMarkOne(n.id);
-                  if (n.task_id) onOpenTask(n.task_id);
+                  if (n.task_id) onOpenTask(n.task_id, n);
                 }}
                 className="flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--bg-hover)]"
                 style={{ background: n.read ? 'transparent' : 'var(--accent-soft)' }}

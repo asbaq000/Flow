@@ -228,6 +228,55 @@ ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes_author_id TEXT;
 ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes_updated_at BIGINT;
 ALTER TABLE meeting_participants ADD COLUMN IF NOT EXISTS attended INTEGER;
 
+-- Conversations. A 'task' conversation is opened automatically the moment a
+-- task involves more than two people and closes when the task is done; a
+-- 'direct' one is between whoever started it. Messages are the record; the
+-- conversation row only says who is in it and whether it is still open.
+CREATE TABLE IF NOT EXISTS conversations (
+  id         TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('direct','task')),
+  task_id    TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL DEFAULT '',
+  closed_at  BIGINT,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conv_task    ON conversations(task_id);
+CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
+
+CREATE TABLE IF NOT EXISTS conversation_members (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- Unread is "anything after this", so a member never needs a row per message.
+  last_read_at    BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_convmem_user ON conversation_members(user_id);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  author_id       TEXT REFERENCES users(id) ON DELETE SET NULL,
+  body            TEXT NOT NULL,
+  created_at      BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, created_at);
+
+-- Profile pictures, kept small and in the row like everything else.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
+
+-- Browser push. One row per browser a person has said yes in.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint   TEXT NOT NULL UNIQUE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+
 CREATE TABLE IF NOT EXISTS counters (
   name  TEXT PRIMARY KEY,
   value BIGINT NOT NULL

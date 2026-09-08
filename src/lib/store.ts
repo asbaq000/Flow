@@ -1,8 +1,8 @@
 import { many, one, run, tx, nextTaskSeq } from './pg';
 import { newId } from './ids';
 import type {
-  ActivityItem, Attachment, Comment, Meeting, MeetingAttendee, MeetingFull, MeetingStatus,
-  Notification, Priority,
+  ActivityItem, Attachment, Comment, Conversation, ConversationFull, Meeting, MeetingAttendee,
+  MeetingFull, MeetingStatus, Message, Notification, Priority,
   ProgressKind, ProgressUpdate, SheetEntry, Status, Tag, Task, TaskFull, TaskLink,
   TaskSheet, User, VoiceNote,
 } from './types';
@@ -11,6 +11,7 @@ import { normalizeUrl } from './url';
 import { publish } from './events';
 import { appUrl, sendMail } from './email';
 import { cancelMeetEvent, createMeetEvent, googleCalendarEnabled } from './googleCalendar';
+import { postToSlack, slackWants } from './slack';
 
 const USER_COLS = 'id, email, name, role, avatar_color, title, created_at';
 
@@ -299,6 +300,7 @@ export async function createTask(
     void emailAssignment(actor, assignee, { id, seq, title });
   }
   publish({ type: 'task.created', taskId: id, actorId: actor.id });
+  await syncTaskConversation(id);
 
   return (await getTask(id))!;
 }
@@ -383,6 +385,8 @@ export async function updateTask(
   }
 
   publish({ type: 'task.updated', taskId: id, actorId: actor.id });
+  await syncTaskConversation(id);
+  if (patch.status === 'DONE') await closeTaskConversation(id, actor);
   return getTask(id);
 }
 
@@ -450,6 +454,7 @@ export async function splitTask(
     [Date.now(), parentId]
   );
   publish({ type: 'task.updated', taskId: parentId, actorId: actor.id });
+  await syncTaskConversation(parentId);
   return getTask(parentId);
 }
 
@@ -599,7 +604,31 @@ export async function notify(
     [newId('n_'), userId, actorId, type, taskId, commentId, message, Date.now()]
   );
   publish({ type: 'notification', taskId, userId, actorId });
+
+  /*
+   * The bell only helps someone who is looking at Flow. Everything else goes
+   * out from here too, so a person is reached wherever they actually are:
+   * push to their browser even with the tab closed, and the team's Slack
+   * channel for anything that moved a task along. Both are fire-and-forget —
+   * a dead push service must never fail the assignment that triggered it.
+   */
+  const url = taskId ? `${appUrl}/workspace?task=${taskId}` : `${appUrl}/workspace`;
+  void import('./push').then(({ pushToUser }) =>
+    pushToUser(userId, { title: PUSH_TITLES[type] ?? 'Flow', body: message, url, tag: taskId ?? undefined })
+  ).catch(() => {});
+  if (slackWants(type)) void postToSlack(message, url);
 }
+
+const PUSH_TITLES: Record<string, string> = {
+  assigned: 'Assigned to you',
+  mention: 'You were mentioned',
+  comment: 'New comment',
+  message: 'New message',
+  review_requested: 'Ready for review',
+  approved: 'Approved',
+  changes_requested: 'Changes requested',
+  meeting: 'Meeting',
+};
 
 export async function listNotifications(userId: string, limit = 60): Promise<Notification[]> {
   const rows = await many<Notification>(
@@ -884,6 +913,7 @@ export async function approveSubmission(
     await notify(task.creator_id, actor.id, 'approved', taskId, null,
       `${actor.name} approved "${task.title}"`);
   }
+  await closeTaskConversation(taskId, actor);
 
   return getTask(taskId);
 }
@@ -962,6 +992,322 @@ export async function deleteAttachment(id: string) {
   const row = await one<{ task_id: string }>('SELECT task_id FROM attachments WHERE id = ?', [id]);
   await run('DELETE FROM attachments WHERE id = ?', [id]);
   publish({ type: 'attachment.removed', taskId: row?.task_id ?? null });
+}
+
+/* ------------------------------------------------------------------ */
+/* Conversations                                                       */
+/* ------------------------------------------------------------------ */
+
+const CONV_COLS = 'id, kind, task_id, title, closed_at, created_at, updated_at';
+
+async function hydrateConversations(rows: Conversation[], forUserId: string): Promise<ConversationFull[]> {
+  if (!rows.length) return [];
+  const ids = rows.map((c) => c.id);
+
+  const [memberRows, lastRows, readRows, taskRows, users] = await Promise.all([
+    many<{ conversation_id: string; user_id: string }>(
+      'SELECT conversation_id, user_id FROM conversation_members WHERE conversation_id = ANY(?)',
+      [ids]
+    ),
+    // The newest message per conversation, in one query rather than one each.
+    many<Message>(
+      `SELECT DISTINCT ON (conversation_id) id, conversation_id, author_id, body, created_at
+       FROM messages WHERE conversation_id = ANY(?)
+       ORDER BY conversation_id, created_at DESC`,
+      [ids]
+    ),
+    many<{ conversation_id: string; last_read_at: number }>(
+      'SELECT conversation_id, last_read_at FROM conversation_members WHERE conversation_id = ANY(?) AND user_id = ?',
+      [ids, forUserId]
+    ),
+    many<{ id: string; seq: number; status: Status }>(
+      'SELECT id, seq, status FROM tasks WHERE id = ANY(?)',
+      [rows.map((c) => c.task_id).filter(Boolean) as string[]]
+    ),
+    userCache(),
+  ]);
+
+  const readAt = new Map(readRows.map((r) => [r.conversation_id, Number(r.last_read_at)]));
+  const unreadRows = await many<{ conversation_id: string; c: number }>(
+    `SELECT m.conversation_id, COUNT(*)::int AS c
+     FROM messages m JOIN conversation_members cm
+       ON cm.conversation_id = m.conversation_id AND cm.user_id = ?
+     WHERE m.conversation_id = ANY(?) AND m.created_at > cm.last_read_at
+       -- System lines ("group opened", "group closed") are context, not
+       -- something somebody said to you, so they never light the badge.
+       AND m.author_id IS NOT NULL AND m.author_id <> ?
+     GROUP BY m.conversation_id`,
+    [forUserId, ids, forUserId]
+  );
+
+  const membersBy = groupBy(memberRows, (r) => r.conversation_id);
+  const lastBy = new Map(lastRows.map((m) => [m.conversation_id, m]));
+  const unreadBy = new Map(unreadRows.map((r) => [r.conversation_id, r.c]));
+  const taskBy = new Map(taskRows.map((t) => [t.id, t]));
+  void readAt;
+
+  return rows.map((c) => {
+    const last = lastBy.get(c.id);
+    const task = c.task_id ? taskBy.get(c.task_id) : undefined;
+    return {
+      ...c,
+      members: (membersBy.get(c.id) ?? [])
+        .map((m) => users.get(m.user_id))
+        .filter(Boolean) as User[],
+      last_message: last ? { ...last, author: users.get(last.author_id ?? '') ?? null } : null,
+      unread: unreadBy.get(c.id) ?? 0,
+      task_seq: task?.seq ?? null,
+      task_status: task?.status ?? null,
+    };
+  });
+}
+
+export async function listConversations(userId: string): Promise<ConversationFull[]> {
+  const rows = await many<Conversation>(
+    `SELECT ${CONV_COLS.split(', ').map((c) => 'c.' + c).join(', ')}
+     FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id
+     WHERE cm.user_id = ? ORDER BY c.updated_at DESC`,
+    [userId]
+  );
+  return hydrateConversations(rows, userId);
+}
+
+export async function getConversation(id: string, forUserId: string): Promise<ConversationFull | null> {
+  const row = await one<Conversation>(`SELECT ${CONV_COLS} FROM conversations WHERE id = ?`, [id]);
+  if (!row) return null;
+  return (await hydrateConversations([row], forUserId))[0];
+}
+
+export async function isConversationMember(id: string, userId: string): Promise<boolean> {
+  return !!(await one(
+    'SELECT 1 AS x FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
+    [id, userId]
+  ));
+}
+
+export async function listMessages(conversationId: string, limit = 200): Promise<Message[]> {
+  const rows = await many<Message>(
+    `SELECT id, conversation_id, author_id, body, created_at FROM messages
+     WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?`,
+    [conversationId, limit]
+  );
+  const users = await userCache();
+  return rows.reverse().map((m) => ({ ...m, author: users.get(m.author_id ?? '') ?? null }));
+}
+
+export async function markConversationRead(conversationId: string, userId: string) {
+  await run(
+    'UPDATE conversation_members SET last_read_at = ? WHERE conversation_id = ? AND user_id = ?',
+    [Date.now(), conversationId, userId]
+  );
+}
+
+/**
+ * Posts a message and tells everyone else in the room. Anyone @mentioned is
+ * told that specifically, the rest get a plain "new message" — so a busy
+ * group does not mean a hundred identical alerts, and a mention still cuts
+ * through.
+ */
+export async function sendMessage(actor: User, conversationId: string, body: string): Promise<Message> {
+  const id = newId('m_');
+  const now = Date.now();
+  const text = body.trim().slice(0, 8000);
+
+  await run(
+    'INSERT INTO messages (id, conversation_id, author_id, body, created_at) VALUES (?,?,?,?,?)',
+    [id, conversationId, actor.id, text, now]
+  );
+  await run('UPDATE conversations SET updated_at = ? WHERE id = ?', [now, conversationId]);
+  await markConversationRead(conversationId, actor.id);
+
+  const conv = await one<Conversation>(`SELECT ${CONV_COLS} FROM conversations WHERE id = ?`, [conversationId]);
+  const members = await many<{ user_id: string }>(
+    'SELECT user_id FROM conversation_members WHERE conversation_id = ?',
+    [conversationId]
+  );
+
+  const where = conv?.title || 'a conversation';
+  const mentioned = new Set<string>();
+  for (const match of text.matchAll(MENTION_RE)) mentioned.add(match[2]);
+
+  for (const m of members) {
+    if (m.user_id === actor.id) continue;
+    const isMention = mentioned.has(m.user_id);
+    await notify(m.user_id, actor.id, isMention ? 'mention' : 'message', conv?.task_id ?? null, null,
+      isMention
+        ? `${actor.name} mentioned you in ${where}`
+        : `${actor.name}: ${text.length > 80 ? text.slice(0, 77) + '…' : text}`);
+  }
+
+  publish({ type: 'message.added', taskId: conv?.task_id ?? null, actorId: actor.id, conversationId });
+  return { id, conversation_id: conversationId, author_id: actor.id, body: text, created_at: now, author: actor };
+}
+
+/** Finds the one-to-one conversation with someone, opening it if there is none. */
+export async function openDirectConversation(actor: User, otherId: string): Promise<ConversationFull> {
+  const existing = await one<{ id: string }>(
+    `SELECT c.id FROM conversations c
+     WHERE c.kind = 'direct'
+       AND EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = c.id AND user_id = ?)
+       AND EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = c.id AND user_id = ?)
+       AND (SELECT COUNT(*) FROM conversation_members WHERE conversation_id = c.id) = 2`,
+    [actor.id, otherId]
+  );
+  if (existing) return (await getConversation(existing.id, actor.id))!;
+
+  const id = newId('cv_');
+  const now = Date.now();
+  await run(
+    `INSERT INTO conversations (id, kind, task_id, title, closed_at, created_at, updated_at)
+     VALUES (?,'direct',NULL,'',NULL,?,?)`,
+    [id, now, now]
+  );
+  await run(
+    'INSERT INTO conversation_members (conversation_id, user_id, last_read_at) VALUES (?,?,?),(?,?,?)',
+    [id, actor.id, now, id, otherId, 0]
+  );
+  return (await getConversation(id, actor.id))!;
+}
+
+/**
+ * Keeps a task's group chat in step with who is on the task.
+ *
+ * A group exists once more than two people are involved — the person who
+ * raised it, the assignee, collaborators, and whoever holds a piece of a
+ * split. Called after anything that changes that set. It only ever adds
+ * members: someone reassigned away keeps the history they were part of.
+ */
+export async function syncTaskConversation(taskId: string): Promise<void> {
+  const task = await getTask(taskId);
+  if (!task) return;
+
+  const people = new Set<string>();
+  if (task.creator_id) people.add(task.creator_id);
+  if (task.assignee_id) people.add(task.assignee_id);
+  for (const c of task.collaborators) people.add(c.id);
+  for (const s of task.subtasks) if (s.assignee_id) people.add(s.assignee_id);
+
+  const existing = await one<{ id: string; closed_at: number | null }>(
+    `SELECT id, closed_at FROM conversations WHERE kind = 'task' AND task_id = ?`,
+    [taskId]
+  );
+
+  if (people.size <= 2 && !existing) return;
+
+  const now = Date.now();
+  let convId = existing?.id;
+
+  if (!convId) {
+    convId = newId('cv_');
+    await run(
+      `INSERT INTO conversations (id, kind, task_id, title, closed_at, created_at, updated_at)
+       VALUES (?,'task',?,?,NULL,?,?)`,
+      [convId, taskId, `TSK-${task.seq} · ${task.title}`.slice(0, 200), now, now]
+    );
+    await run(
+      `INSERT INTO messages (id, conversation_id, author_id, body, created_at) VALUES (?,?,NULL,?,?)`,
+      [newId('m_'), convId, `Group opened for TSK-${task.seq}. Everyone on the task is here.`, now]
+    );
+  } else {
+    await run('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?',
+      [`TSK-${task.seq} · ${task.title}`.slice(0, 200), now, convId]);
+  }
+
+  const current = new Set(
+    (await many<{ user_id: string }>(
+      'SELECT user_id FROM conversation_members WHERE conversation_id = ?', [convId]
+    )).map((r) => r.user_id)
+  );
+  const add = [...people].filter((p) => !current.has(p));
+  if (add.length) {
+    await run(
+      `INSERT INTO conversation_members (conversation_id, user_id, last_read_at)
+       VALUES ${add.map(() => '(?,?,0)').join(',')} ON CONFLICT DO NOTHING`,
+      add.flatMap((p) => [convId, p])
+    );
+    for (const p of add) {
+      await notify(p, null, 'message', taskId, null, `You were added to the group for TSK-${task.seq}`);
+    }
+  }
+
+  // Reopen if the task came back from done.
+  if (existing?.closed_at && task.status !== 'DONE') {
+    await run('UPDATE conversations SET closed_at = NULL WHERE id = ?', [convId]);
+  }
+
+  publish({ type: 'conversation.updated', taskId, conversationId: convId });
+}
+
+/** Closes the group once the task is finished — read-only, never deleted. */
+export async function closeTaskConversation(taskId: string, actor: User): Promise<void> {
+  const conv = await one<{ id: string; closed_at: number | null }>(
+    `SELECT id, closed_at FROM conversations WHERE kind = 'task' AND task_id = ?`,
+    [taskId]
+  );
+  if (!conv || conv.closed_at) return;
+  const now = Date.now();
+  await run('UPDATE conversations SET closed_at = ?, updated_at = ? WHERE id = ?', [now, now, conv.id]);
+  await run(
+    'INSERT INTO messages (id, conversation_id, author_id, body, created_at) VALUES (?,?,NULL,?,?)',
+    [newId('m_'), conv.id, `Task approved by ${actor.name}. This group is now closed.`, now]
+  );
+  publish({ type: 'conversation.updated', taskId, conversationId: conv.id });
+}
+
+/* ------------------------------------------------------------------ */
+/* Profile                                                             */
+/* ------------------------------------------------------------------ */
+
+export async function setAvatar(userId: string, data: Buffer, mime: string) {
+  await run('UPDATE users SET avatar_data = ?, avatar_mime = ? WHERE id = ?', [data, mime, userId]);
+  invalidateUserCache();
+}
+
+export async function getAvatar(userId: string): Promise<{ data: Buffer; mime: string } | null> {
+  const row = await one<{ avatar_data: Buffer | null; avatar_mime: string | null }>(
+    'SELECT avatar_data, avatar_mime FROM users WHERE id = ?', [userId]
+  );
+  if (!row?.avatar_data) return null;
+  return { data: row.avatar_data, mime: row.avatar_mime ?? 'image/png' };
+}
+
+export async function usersWithAvatars(): Promise<Set<string>> {
+  const rows = await many<{ id: string }>('SELECT id FROM users WHERE avatar_data IS NOT NULL');
+  return new Set(rows.map((r) => r.id));
+}
+
+export async function getPasswordHash(userId: string): Promise<string | null> {
+  const row = await one<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = ?', [userId]);
+  return row?.password_hash ?? null;
+}
+
+export async function setPasswordHash(userId: string, hash: string) {
+  await run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, userId]);
+  // Every other session goes: a changed password should log out whoever else has it.
+  await run('DELETE FROM sessions WHERE user_id = ?', [userId]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Browser push                                                        */
+/* ------------------------------------------------------------------ */
+
+export interface PushSub { endpoint: string; p256dh: string; auth: string }
+
+export async function addPushSubscription(userId: string, sub: PushSub) {
+  await run(
+    `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at)
+     VALUES (?,?,?,?,?,?)
+     ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`,
+    [newId('ps_'), userId, sub.endpoint, sub.p256dh, sub.auth, Date.now()]
+  );
+}
+
+export async function removePushSubscription(endpoint: string) {
+  await run('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+}
+
+export async function listPushSubscriptions(userId: string): Promise<PushSub[]> {
+  return many<PushSub>('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?', [userId]);
 }
 
 /* ------------------------------------------------------------------ */

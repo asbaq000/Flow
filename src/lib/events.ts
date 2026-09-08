@@ -22,6 +22,8 @@ export type FlowEventType =
   | 'attachment.removed'
   | 'meeting.created'
   | 'meeting.updated'
+  | 'message.added'
+  | 'conversation.updated'
   | 'notification';
 
 export interface FlowEvent {
@@ -30,6 +32,7 @@ export interface FlowEvent {
   /** When set, only this user's stream receives the event. */
   userId?: string | null;
   actorId?: string | null;
+  conversationId?: string | null;
   at: number;
 }
 

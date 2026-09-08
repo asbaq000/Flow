@@ -1,8 +1,8 @@
 'use client';
 
 import type {
-  Attachment, Block, Comment, MeetingFull, Notification, Priority, ProgressUpdate, Status, Tag,
-  TaskFull,
+  Attachment, Block, Comment, ConversationFull, MeetingFull, Message, Notification, Priority,
+  ProgressUpdate, Status, Tag, TaskFull,
   TaskSheet, User, VoiceNote,
 } from './types';
 
@@ -247,6 +247,44 @@ export const api = {
       }),
     cancel: (id: string) =>
       request<{ meeting: MeetingFull }>(`/api/meetings/${id}`, { method: 'DELETE' }),
+  },
+  conversations: {
+    list: () => request<{ conversations: ConversationFull[] }>('/api/conversations'),
+    open: (id: string) =>
+      request<{ conversation: ConversationFull; messages: Message[] }>(`/api/conversations/${id}`),
+    direct: (userId: string) =>
+      request<{ conversation: ConversationFull }>('/api/conversations', {
+        method: 'POST', body: JSON.stringify({ userId }),
+      }),
+    send: (id: string, body: string) =>
+      request<{ message: Message }>(`/api/conversations/${id}/messages`, {
+        method: 'POST', body: JSON.stringify({ body }),
+      }),
+  },
+  profile: {
+    withPictures: () => request<{ ids: string[] }>('/api/users/avatars'),
+    avatarUrl: (userId: string) => `/api/users/${userId}/avatar`,
+    setAvatar: async (file: File) => {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      const res = await fetch('/api/users/me/avatar', { method: 'POST', body: form });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!res.ok) throw new ApiError(data.error ?? 'Upload failed', res.status);
+      return data as { ok: true };
+    },
+    changePassword: (current: string, next: string) =>
+      request<{ ok: true; signedOut: boolean }>('/api/users/me/password', {
+        method: 'POST', body: JSON.stringify({ current, next }),
+      }),
+    exportUrl: (userId: string) => `/api/users/${userId}/export`,
+  },
+  push: {
+    key: () => request<{ enabled: boolean; key: string | null }>('/api/push/key'),
+    subscribe: (sub: PushSubscriptionJSON) =>
+      request<{ ok: true }>('/api/push/subscribe', { method: 'POST', body: JSON.stringify(sub) }),
+    unsubscribe: (endpoint: string) =>
+      request<{ ok: true }>('/api/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
   },
   logout: () => request<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
 };

@@ -9,9 +9,9 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { CalendarDays, GitBranch, Link2, MessageSquare, Plus, Split } from 'lucide-react';
 import type { Priority, Status, TaskFull, User } from '@/lib/types';
-import { PRIORITIES, STATUSES } from '@/lib/types';
+import { PRIORITIES, STATUSES, docToPlain } from '@/lib/types';
 import { canAssign, canChangeStatus, canSplit } from '@/lib/permissions';
-import { Avatar, AvatarStack, PriorityBars, TagChip } from '../ui';
+import { Avatar, AvatarStack, PriorityBars } from '../ui';
 import type { GroupBy } from '../Workspace';
 import { dueMeta } from './shared';
 
@@ -203,6 +203,7 @@ export function TaskCard({
   const due = dueMeta(task.due_date, task.status);
   const doneSubs = task.subtasks.filter((s) => s.status === 'DONE').length;
   const splitPeople = task.subtasks.map((s) => s.assignee).filter(Boolean) as User[];
+  const note = docToPlain(task.description).split('\n').find((l) => l.trim())?.slice(0, 140);
 
   return (
     <article
@@ -210,18 +211,26 @@ export function TaskCard({
       className={`card pri-${task.priority} cursor-pointer p-3 transition-all hover:-translate-y-px hover:shadow-md`}
     >
       {task.tags.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1">
+        <div className="mb-2 flex flex-wrap gap-1">
           {task.tags.slice(0, 3).map((t) => (
-            <TagChip key={t.id} tag={t} />
+            <span key={t.id} className="rounded-md px-1.5 py-px text-[10.5px] font-medium" style={{ background: 'rgba(255,255,255,0.65)', color: 'var(--text-secondary)' }}>
+              #{t.name}
+            </span>
           ))}
         </div>
       )}
 
       <p
-        className={`text-[13.5px] font-medium leading-snug ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}
+        className={`text-[13.5px] font-semibold leading-snug ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}
       >
         {task.title}
       </p>
+      {/* The first line of the brief, the way the reference shows a "Note:". */}
+      {note && (
+        <p className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-[var(--text-secondary)]">
+          <span className="font-medium">Note:</span> {note}
+        </p>
+      )}
 
       {task.subtasks.length > 0 ? (
         <div className="mt-2.5">
@@ -255,14 +264,14 @@ export function TaskCard({
         <PriorityBars priority={task.priority} />
 
         {due && (
-          <span className="inline-flex items-center gap-1 text-[11px] font-medium" style={{ color: due.color }}>
-            <CalendarDays size={11} />
+          <span className="inline-flex items-center gap-1 rounded-md px-1.5 py-px text-[10.5px] font-medium" style={{ color: due.color, background: 'rgba(255,255,255,0.6)' }}>
+            <CalendarDays size={10} />
             {due.label}
           </span>
         )}
 
         {task.comment_count > 0 && (
-          <span className="inline-flex items-center gap-0.5 text-[11px] text-[var(--text-tertiary)]">
+          <span className="inline-flex items-center gap-0.5 font-mono text-[11px] tabular-nums text-[var(--text-tertiary)]">
             <MessageSquare size={11} />
             {task.comment_count}
           </span>

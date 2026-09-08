@@ -127,6 +127,41 @@ export function meetingPhase(
   return 'upcoming';
 }
 
+export type ConversationKind = 'direct' | 'task';
+
+export interface Conversation {
+  id: string;
+  kind: ConversationKind;
+  task_id: string | null;
+  title: string;
+  /** Set when the task behind a task conversation is done. */
+  closed_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Message {
+  id: string;
+  conversation_id: string;
+  author_id: string | null;
+  body: string;
+  created_at: number;
+  author: User | null;
+}
+
+export interface ConversationFull extends Conversation {
+  members: User[];
+  last_message: Message | null;
+  unread: number;
+  task_seq?: number | null;
+  task_status?: Status | null;
+}
+
+/** Roughly "does this person have a picture", without shipping the bytes. */
+export interface UserProfile extends User {
+  has_avatar: boolean;
+}
+
 export interface Attachment {
   id: string;
   task_id: string;
