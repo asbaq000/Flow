@@ -9,6 +9,24 @@ export const revalidate = 0;
 
 const HEARTBEAT_MS = 25_000;
 
+/*
+ * How long one stream lives before it closes itself and the browser opens a
+ * new one.
+ *
+ * Nothing here is optional. On Vercel the platform kills a function at its
+ * time limit, and a killed function does not necessarily fire the request's
+ * abort — so a stream that only cleans up on abort can leave its heartbeat
+ * timer and its subscriber behind on a warm instance. Every tab opens a fresh
+ * stream about once a minute, so what leaks does not leak slowly: it climbs
+ * until the container runs out of file descriptors, and then unrelated things
+ * start failing — a DNS lookup answering EBUSY, for one, which is how this
+ * was found.
+ *
+ * Fifty seconds is inside every Vercel plan's limit, so the close is ours and
+ * therefore certain. The browser reconnects after the `retry` interval below.
+ */
+const MAX_STREAM_MS = 50_000;
+
 export async function GET(req: Request) {
   const user = await currentUser();
   if (!user) return new Response('Not signed in', { status: 401 });
@@ -19,12 +37,16 @@ export async function GET(req: Request) {
     start(controller) {
       let closed = false;
 
+      // Declared before `send` so a failed enqueue can tear the rest down too:
+      // a browser that has gone away should not leave a timer ticking behind it.
+      let cleanup: () => void;
+
       const send = (payload: string) => {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(payload));
         } catch {
-          closed = true;
+          cleanup();
         }
       };
 
@@ -41,11 +63,13 @@ export async function GET(req: Request) {
       // Comment-only ping keeps proxies and the browser from timing the stream out.
       const heartbeat = setInterval(() => send(': ping\n\n'), HEARTBEAT_MS);
 
-      const cleanup = () => {
+      cleanup = () => {
         if (closed) return;
         closed = true;
+        clearTimeout(lifetime);
         clearInterval(heartbeat);
         unsubscribe();
+        req.signal.removeEventListener('abort', cleanup);
         try {
           controller.close();
         } catch {
@@ -53,6 +77,12 @@ export async function GET(req: Request) {
         }
       };
 
+      const lifetime = setTimeout(() => {
+        // Named, so the browser knows this close was planned and comes
+        // straight back instead of flashing "offline" every fifty seconds.
+        send('event: cycle\ndata: {}\n\n');
+        cleanup();
+      }, MAX_STREAM_MS);
       req.signal.addEventListener('abort', cleanup);
     },
   });

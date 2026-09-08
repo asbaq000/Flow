@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import dns from 'node:dns/promises';
 import type { Transporter } from 'nodemailer';
 
 /**
@@ -26,17 +27,50 @@ const FROM = process.env.MAIL_FROM || (USER ? `Flow <${USER}>` : 'Flow <no-reply
 declare global {
   // eslint-disable-next-line no-var
   var __flow_mailer__: Transporter | undefined;
+  // eslint-disable-next-line no-var
+  var __flow_mail_host__: { ip: string; at: number } | undefined;
 }
 
-function transport(): Transporter | null {
+/**
+ * The address to actually dial, resolved once and kept.
+ *
+ * Nodemailer would hand the hostname to the OS resolver on every send, and
+ * that is the call that fails with EBUSY when a container is short of file
+ * descriptors. Asking a DNS server directly (c-ares, not getaddrinfo) once
+ * every ten minutes and dialling the address is both cheaper and out of the
+ * way of that failure. TLS still validates against the hostname — see
+ * `servername` below — so nothing about the certificate check is loosened.
+ *
+ * If the lookup fails we hand back the hostname and let nodemailer try the
+ * ordinary way; a resolver that is down is not made better by refusing to try.
+ */
+const HOST_TTL_MS = 10 * 60_000;
+
+async function dialAddress(): Promise<string> {
+  const cached = global.__flow_mail_host__;
+  if (cached && Date.now() - cached.at < HOST_TTL_MS) return cached.ip;
+  try {
+    const [ip] = await dns.resolve4(HOST);
+    if (!ip) return HOST;
+    global.__flow_mail_host__ = { ip, at: Date.now() };
+    return ip;
+  } catch (err) {
+    console.warn('[email] could not resolve', HOST, '-', err instanceof Error ? err.message : err);
+    return HOST;
+  }
+}
+
+function transport(host: string): Transporter | null {
   if (!emailEnabled) return null;
   if (!global.__flow_mailer__) {
     global.__flow_mailer__ = nodemailer.createTransport({
-      host: HOST,
+      host,
       port: PORT,
       // 465 is implicit TLS; 587 upgrades with STARTTLS.
       secure: PORT === 465,
       auth: { user: USER, pass: PASS },
+      // Dialling an address, so the certificate is checked against the name.
+      tls: { servername: HOST },
       /*
        * Fail fast rather than hang. This runs inside a serverless function
        * with its own time limit; a connection that is never going to open
@@ -123,7 +157,7 @@ export interface MailOutcome {
  * identical from the outside, and both are one-line fixes once named.
  */
 export async function sendMailDetailed(mail: Mail): Promise<MailOutcome> {
-  const tx = transport();
+  const tx = emailEnabled ? transport(await dialAddress()) : null;
   if (!tx) {
     console.info(`[email] skipped (SMTP not configured): "${mail.subject}" -> ${mail.to}`);
     return { ok: false, error: 'SMTP is not configured on this server' };
@@ -148,6 +182,10 @@ export async function sendMailDetailed(mail: Mail): Promise<MailOutcome> {
       const code = (err as { code?: string }).code ?? '';
       if (attempt === 2 || !isTransient(last, code)) break;
       console.warn(`[email] transient failure (${code || 'unknown'}), retrying once:`, last);
+      // Drop the cached address and the transporter built on it: if the box we
+      // were dialling is the problem, the second attempt should not reuse it.
+      global.__flow_mail_host__ = undefined;
+      global.__flow_mailer__ = undefined;
       await new Promise((r) => setTimeout(r, 800));
     }
   }

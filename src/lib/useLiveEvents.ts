@@ -25,6 +25,10 @@ export function useLiveEvents(onEvent: (event: FlowEvent) => void): LiveStatus {
     let retry: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
     let disposed = false;
+    // Set when the server announces it is closing on purpose. A stream has a
+    // fixed lifetime there — see the events route — and a planned handover is
+    // not the connection going down.
+    let cycling = false;
 
     const connect = () => {
       if (disposed) return;
@@ -32,8 +36,11 @@ export function useLiveEvents(onEvent: (event: FlowEvent) => void): LiveStatus {
 
       source.addEventListener('ready', () => {
         attempts = 0;
+        cycling = false;
         setStatus('live');
       });
+
+      source.addEventListener('cycle', () => { cycling = true; });
 
       source.addEventListener('flow', (e) => {
         try {
@@ -44,10 +51,16 @@ export function useLiveEvents(onEvent: (event: FlowEvent) => void): LiveStatus {
       });
 
       source.onerror = () => {
-        setStatus('offline');
         source?.close();
         source = null;
         if (disposed) return;
+        if (cycling) {
+          // Planned handover: straight back, and the indicator never blinks.
+          cycling = false;
+          retry = setTimeout(connect, 50);
+          return;
+        }
+        setStatus('offline');
         // 1s, 2s, 4s … capped at 15s.
         const delay = Math.min(15_000, 1000 * 2 ** attempts++);
         retry = setTimeout(connect, delay);
