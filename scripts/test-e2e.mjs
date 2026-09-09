@@ -968,6 +968,34 @@ console.log('\nNotifications can be tested');
   ok('signed out, no test', (await fetch(`${BASE}/api/notifications/test`, { method: 'POST' })).status === 401);
 }
 
+console.log('\nTimes are written in the reader’s clock, not the server’s');
+{
+  ok('a zone that does not exist is refused',
+     (await call(dev, '/api/me', { method: 'PATCH', body: JSON.stringify({ timeZone: 'Mars/Olympus' }) })).status === 400);
+  ok('an empty one too',
+     (await call(dev, '/api/me', { method: 'PATCH', body: JSON.stringify({ timeZone: '  ' }) })).status === 400);
+  ok('signed out, nobody sets one',
+     (await fetch(`${BASE}/api/me`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ timeZone: 'Asia/Karachi' }) })).status === 401);
+
+  const set = await call(dev, '/api/me', { method: 'PATCH', body: JSON.stringify({ timeZone: 'Asia/Karachi' }) });
+  ok('a real zone is stored', set.body.user?.time_zone === 'Asia/Karachi', set.body.user?.time_zone);
+  ok('and it comes back on the session', (await call(dev, '/api/me')).body.user?.time_zone === 'Asia/Karachi');
+
+  // The server runs on UTC; Karachi is five hours ahead of it.
+  await call(dev, '/api/notifications/test', { method: 'POST' });
+  const karachi = (await call(dev, '/api/notifications')).body.notifications.find((n) => n.type === 'test');
+  const shown = Number((karachi?.message ?? '').match(/at (\d\d):/)?.[1] ?? -1);
+  ok('the time is written in that zone', shown === (new Date().getUTCHours() + 5) % 24,
+     `shown ${shown}, utc ${new Date().getUTCHours()}`);
+  ok('and says which zone it is', /GMT\+5/.test(karachi?.message ?? ''), karachi?.message);
+
+  await call(dev, '/api/me', { method: 'PATCH', body: JSON.stringify({ timeZone: 'America/Los_Angeles' }) });
+  await call(dev, '/api/notifications/test', { method: 'POST' });
+  const la = (await call(dev, '/api/notifications')).body.notifications.filter((n) => n.type === 'test')[0];
+  ok('moving somebody moves their clock with them', /GMT-[78]/.test(la?.message ?? ''), la?.message);
+}
+
 console.log('\nProfile');
 {
   // A throwaway account, because changing a password signs every session out.

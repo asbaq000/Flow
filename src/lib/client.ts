@@ -330,6 +330,9 @@ export const api = {
     unsubscribe: (endpoint: string) =>
       request<{ ok: true }>('/api/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
   },
+  /** Tells the server which clock this browser reads times in. */
+  setTimeZone: (timeZone: string) =>
+    request<{ user: User }>('/api/me', { method: 'PATCH', body: JSON.stringify({ timeZone }) }),
   logout: () => request<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
 };
 

@@ -302,6 +302,11 @@ CREATE TABLE IF NOT EXISTS message_files (
 CREATE INDEX IF NOT EXISTS idx_message_files_msg ON message_files(message_id);
 
 -- Profile pictures, kept small and in the row like everything else.
+-- Where this person actually is. The server runs in UTC, so anything it
+-- writes for somebody to read — a time in an email, a notification — is in
+-- the wrong clock until it knows theirs. Captured from the browser on sign-in.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS time_zone TEXT;
+
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
 -- When the picture last changed. It is the cache key: the URL carries it, so

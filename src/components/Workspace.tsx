@@ -128,6 +128,17 @@ export default function Workspace({
     setTheme((document.documentElement.getAttribute('data-theme') as 'light' | 'dark') ?? 'dark');
   }, []);
 
+  /*
+   * The server is on UTC, so a time it writes into an email is in the wrong
+   * clock until it knows this browser's. Sent once, and only when it differs
+   * from what is already stored — nothing to do on most loads.
+   */
+  useEffect(() => {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!zone || zone === me.time_zone) return;
+    api.setTimeZone(zone).catch(() => {});
+  }, [me.time_zone]);
+
   /** Ends the session and returns to the door, even if the request fails. */
   const signOut = useCallback(async () => {
     try {

@@ -106,6 +106,8 @@ export interface User {
   role: Role;
   avatar_color: string;
   title: string | null;
+  /** IANA name, e.g. "Asia/Karachi". Null until a browser has told us. */
+  time_zone: string | null;
   created_at: number;
 }
 

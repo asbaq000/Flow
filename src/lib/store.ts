@@ -17,7 +17,7 @@ import { appUrl, sendMail } from './email';
 import { cancelMeetEvent, createMeetEvent, googleCalendarEnabled } from './googleCalendar';
 import { postToSlack, slackWants } from './slack';
 
-const USER_COLS = 'id, org_id, email, name, role, avatar_color, title, created_at';
+const USER_COLS = 'id, org_id, email, name, role, avatar_color, title, time_zone, created_at';
 
 /**
  * Every hydrated task, comment, voice note and progress update needs its
@@ -1538,6 +1538,18 @@ export async function usersWithAvatars(orgId: string): Promise<{ id: string; v: 
   return rows.map((r) => ({ id: r.id, v: Number(r.avatar_updated_at ?? 0) }));
 }
 
+/**
+ * Remembers where somebody is, so a time written for them is in their clock.
+ *
+ * Only ever set from the browser that knows: the server's own zone is UTC on
+ * every host worth deploying to, and guessing from an IP address is worse
+ * than asking the machine that already knows the answer.
+ */
+export async function setUserTimeZone(userId: string, zone: string) {
+  await run('UPDATE users SET time_zone = ? WHERE id = ?', [zone, userId]);
+  invalidateUserCache();
+}
+
 export async function getPasswordHash(userId: string): Promise<string | null> {
   const row = await one<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = ?', [userId]);
   return row?.password_hash ?? null;
@@ -1660,7 +1672,7 @@ async function hydrateMeeting(row: Meeting): Promise<MeetingFull> {
   const [organizer, participants, task] = await Promise.all([
     getUser(row.organizer_id),
     many<MeetingAttendee>(
-      `SELECT u.id, u.org_id, u.email, u.name, u.role, u.avatar_color, u.title, u.created_at,
+      `SELECT u.id, u.org_id, u.email, u.name, u.role, u.avatar_color, u.title, u.time_zone, u.created_at,
               mp.attended
        FROM users u JOIN meeting_participants mp ON mp.user_id = u.id
        WHERE mp.meeting_id = ? ORDER BY u.name`,

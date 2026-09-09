@@ -2,6 +2,7 @@ import { appUrl, emailEnabled, sendMailDetailed } from './email';
 import { pushEnabled, pushToUser } from './push';
 import { postToSlack, slackEnabled } from './slack';
 import { notify } from './store';
+import { timeForUser } from './clock';
 import type { NotificationTestResult, User } from './types';
 
 /**
@@ -14,7 +15,7 @@ import type { NotificationTestResult, User } from './types';
  * instead of "something probably happened".
  */
 export async function testNotificationChannels(user: User): Promise<NotificationTestResult> {
-  const when = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const when = timeForUser(user, Date.now());
   const text = `Test notification for ${user.name} at ${when} — this channel works.`;
   const url = `${appUrl}/workspace`;
 
