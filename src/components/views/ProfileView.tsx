@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Bell, BellOff, Building2, Camera, Check, Copy, Crown, Download, KeyRound, Loader2, LogOut, Moon,
-  RefreshCw, Send, Sun, TrendingUp, X,
+  RefreshCw, Send, Sun, TrendingUp, Video, X,
 } from 'lucide-react';
 import type { NotificationTestResult, Organization, TaskSheet, User } from '@/lib/types';
 import { api } from '@/lib/client';
 import { usePush } from '@/lib/usePush';
+import { PREF_RECORD_CALLS, usePref } from '@/lib/prefs';
 import { Avatar, avatarChanged, roleShort } from '../ui';
 import { formatDateTime } from './shared';
 
@@ -133,6 +134,7 @@ export default function ProfileView({
             </p>
             <PushToggle />
             <NotificationTest />
+            <CallRecording />
             <div className="mt-4 flex flex-wrap gap-2 border-t pt-3">
               <button onClick={onToggleTheme} className="btn btn-outline">
                 {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
@@ -366,6 +368,40 @@ function CodeRow({
         </button>
       </div>
       <p className="mt-1.5 text-[12px] text-[var(--text-tertiary)]">{blurb}</p>
+    </div>
+  );
+}
+
+/**
+ * Whether this browser offers to record a call and write it up.
+ *
+ * Off is a real choice: the recorder captures whatever the tab is playing,
+ * which is everybody on the call, and a team that would rather nobody had
+ * that button should be able to put it away.
+ */
+function CallRecording() {
+  const [on, setOn] = usePref(PREF_RECORD_CALLS, true);
+  return (
+    <div className="mt-3 border-t pt-3">
+      <label className="flex cursor-pointer items-start gap-2">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => setOn(e.target.checked)}
+          className="mt-0.5 h-4 w-4 shrink-0"
+          style={{ accentColor: 'var(--accent)' }}
+        />
+        <span>
+          <span className="flex items-center gap-1.5 text-[13px] font-medium">
+            <Video size={13} /> Offer to record calls on this device
+          </span>
+          <span className="mt-0.5 block text-[12px] leading-snug text-[var(--text-secondary)]">
+            A live call gets a record button, and stopping it writes the minutes on its own. Google only
+            records to Drive for paid Workspace accounts, so this captures the tab here instead — the audio
+            is transcribed on this device and never uploaded.
+          </span>
+        </span>
+      </label>
     </div>
   );
 }

@@ -23,10 +23,12 @@ type Stage =
  * out of a database sized for text.
  */
 export default function MeetingRecorder({
-  meeting, onSaved,
+  meeting, onSaved, live = false,
 }: {
   meeting: MeetingFull;
   onSaved: () => void;
+  /** Running right now, rather than just finished — changes what it says. */
+  live?: boolean;
 }) {
   const [stage, setStage] = useState<Stage>({ kind: 'idle' });
   const [error, setError] = useState('');
@@ -182,7 +184,9 @@ export default function MeetingRecorder({
         <>
           <div className="flex flex-wrap items-center gap-1.5">
             <Wand2 size={12} className="text-[var(--text-tertiary)]" />
-            <span className="text-[12px] font-medium">Write the minutes for me</span>
+            <span className="text-[12px] font-medium">
+              {live ? 'Record this call and write it up' : 'Still recording? Write it up'}
+            </span>
             <span className="ml-auto flex gap-1.5">
               <button onClick={() => start('call')} className="btn btn-primary py-1 text-[12px]">
                 <Circle size={10} fill="currentColor" /> Record the call
@@ -194,8 +198,8 @@ export default function MeetingRecorder({
           </div>
           <p className="mt-1 text-[11.5px] leading-relaxed text-[var(--text-tertiary)]">
             Choose the Google Meet tab and tick <span className="font-medium">Also share tab audio</span>. The
-            audio is transcribed on this device and never uploaded — only the text is saved. Let the others
-            know they are being recorded.
+            minutes are written on their own when you stop. The audio is transcribed on this device and never
+            uploaded — only the text is saved. Let the others know they are being recorded.
           </p>
         </>
       )}

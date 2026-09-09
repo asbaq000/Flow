@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import type { MeetingAttendee, MeetingFull, User } from '@/lib/types';
 import { meetingPhase } from '@/lib/types';
+import { PREF_RECORD_CALLS, usePref } from '@/lib/prefs';
 import { api } from '@/lib/client';
 import { canCancelMeeting } from '@/lib/permissions';
 import { Avatar } from '../ui';
@@ -98,6 +99,18 @@ function MeetingCard({
 
   const phase = meetingPhase(meeting);
   const mayManage = canCancelMeeting(me, meeting);
+  const [recordingOffered] = usePref(PREF_RECORD_CALLS, true);
+
+  /*
+   * A call from three weeks ago cannot be recorded, and offering to was the
+   * single most confusing thing on this page. The window is: while it is
+   * running, plus two hours after the scheduled end — long enough for a call
+   * that overran, or for somebody writing it up straight afterwards from a
+   * recording still playing on their phone.
+   */
+  const endedAt = meeting.starts_at + meeting.duration_min * 60_000;
+  const stillRecordable =
+    phase === 'live' || (phase === 'ended' && Date.now() - endedAt < 2 * 60 * 60_000);
 
   const act = async (kind: 'retry' | 'cancel') => {
     if (busy) return;
@@ -172,13 +185,8 @@ function MeetingCard({
 
       <Attendance meeting={meeting} phase={phase} mayManage={mayManage} onChanged={onChanged} />
 
-      {/*
-       * Offered while the call is running and afterwards: people usually
-       * remember to hit record once it is already under way, and a recording
-       * made on the phone can still be written up later.
-       */}
-      {mayManage && (phase === 'live' || phase === 'ended') && (
-        <MeetingRecorder meeting={meeting} onSaved={onChanged} />
+      {mayManage && recordingOffered && stillRecordable && (
+        <MeetingRecorder meeting={meeting} live={phase === 'live'} onSaved={onChanged} />
       )}
 
       {/* Minutes only make sense once there is something to write up. */}
