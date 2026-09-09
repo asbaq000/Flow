@@ -478,6 +478,22 @@ console.log('\nA split task and its pieces finish together');
   await call(ceo, `/api/tasks/${parent.id}`, { method: 'DELETE' });
 }
 
+console.log('\nNew work arrives at the top of the list');
+{
+  const older = (await call(lead, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E older ${RUN}` }) })).body.task;
+  const newer = (await call(lead, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E newer ${RUN}` }) })).body.task;
+
+  const order = (await call(lead, '/api/tasks')).body.tasks.map((t) => t.id);
+  ok('the newest task sits above the one before it',
+     order.indexOf(newer.id) < order.indexOf(older.id),
+     `newer at ${order.indexOf(newer.id)}, older at ${order.indexOf(older.id)}`);
+  ok('and it is the first thing on the board', order[0] === newer.id, order.slice(0, 2).join(','));
+
+  for (const id of [older.id, newer.id]) await call(ceo, `/api/tasks/${id}`, { method: 'DELETE' });
+}
+
 console.log('\nHigh is what a task is unless somebody says otherwise');
 {
   const plain = (await call(manager, '/api/tasks', {

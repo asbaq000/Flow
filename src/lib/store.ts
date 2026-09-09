@@ -251,9 +251,9 @@ export async function createTask(
   const assignee = input.assigneeId !== undefined ? input.assigneeId : routedTo;
   const title = input.title.trim() || 'Untitled';
 
-  const [seq, maxPos] = await Promise.all([
+  const [seq, minPos] = await Promise.all([
     nextTaskSeq(actor.org_id),
-    one<{ p: number }>('SELECT COALESCE(MAX(position), 0) AS p FROM tasks WHERE org_id = ?', [actor.org_id]),
+    one<{ p: number }>('SELECT COALESCE(MIN(position), 0) AS p FROM tasks WHERE org_id = ?', [actor.org_id]),
   ]);
 
   await run(
@@ -273,7 +273,10 @@ export async function createTask(
       input.dueDate ?? null,
       input.startDate ?? null,
       input.estimate ?? null,
-      (maxPos?.p ?? 0) + 1000,
+      // Below every other position, so the newest work is the first thing in
+      // its column rather than the thing you scroll to the bottom to find.
+      // Dragging still reorders freely; this only decides where a task starts.
+      (minPos?.p ?? 0) - 1000,
       now, now,
     ]
   );
