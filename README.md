@@ -311,7 +311,7 @@ The app talks to PostgreSQL. Locally that is **PGlite**, an embedded Postgres th
 |---|---|
 | `DATABASE_URL` | the Supabase pooling URI |
 | `APP_URL` | `https://your-app.vercel.app` |
-| `SMTP_HOST` | `smtp.gmail.com` |
+| `SMTP_HOST` | `smtp.gmail.com` (only needed without the Gmail API) |
 | `SMTP_PORT` | `587` |
 | `SMTP_USER` | your Gmail address |
 | `SMTP_PASS` | your 16-character App Password |
@@ -415,3 +415,25 @@ Live updates use one SSE connection per open tab, and the event bus is in-memory
 Voice notes are recorded in the browser and stored as-is — there is no transcription, no waveform scrubbing beyond a simple progress bar, and no compression pass beyond what the browser's encoder does.
 
 What's here is built properly and verified end-to-end: **130 automated checks** (`npm test`) cover the routing rule, every permission boundary, the five-role hierarchy, Dev-only assignment, splitting, progress reporting, the full submit → review → approve loop, the live event stream, voice note upload/streaming/deletion, task sheets, mention scoping, password reset, CEO setup-code claiming, offboarding (including that a removed person's comments and progress reports survive), notifications, and input validation. They run against real PostgreSQL.
+
+### How mail actually leaves
+
+Flow sends over the **Gmail API**, not SMTP — one HTTPS request to
+`gmail.googleapis.com` using the same Google client the calendar already uses.
+That is deliberate. SMTP needs a name lookup for `smtp.gmail.com` and a socket
+held open on port 587, and a serverless container is unreliable at both: a
+lookup that comes back `EBUSY` never reaches Gmail at all, and no amount of
+retrying fixes a wedged resolver.
+
+It needs one extra scope on the refresh token,
+`https://www.googleapis.com/auth/gmail.send`. If yours was minted before this,
+mail will fail with *"authorised for Calendar but not for sending mail"* — the
+fix is three steps:
+
+1. Google Cloud console → **enable the Gmail API**.
+2. OAuth consent screen → add the `gmail.send` scope.
+3. `npm run google:auth`, then replace `GOOGLE_REFRESH_TOKEN` everywhere
+   (`.env.local` and your host's environment variables).
+
+`Settings → Send me a test on every channel` says which route a message took,
+so you can tell at a glance whether the API or the SMTP fallback carried it.

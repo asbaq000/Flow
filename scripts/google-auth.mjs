@@ -19,7 +19,15 @@ import { spawn } from 'node:child_process';
 
 const PORT = 5555;
 const REDIRECT_URI = `http://localhost:${PORT}/callback`;
-const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+/*
+ * Two scopes: one to book the meeting, one to send the mail. Gmail over HTTPS
+ * is what Flow uses instead of SMTP — a serverless container cannot be relied
+ * on to resolve a mail host and hold a socket open to it.
+ */
+const SCOPE = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/gmail.send',
+].join(' ');
 
 /**
  * Standalone scripts do not get Next.js's env loading. Both filenames are
@@ -54,10 +62,12 @@ Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.local (or .env) first.
 
   console.cloud.google.com -> APIs & Services
     1. Enable the Google Calendar API
-    2. OAuth consent screen -> External -> add scope ${SCOPE}
+    2. Enable the Gmail API too
+    3. OAuth consent screen -> External -> add both scopes:
+       ${SCOPE.split(' ').join('\n       ')}
        Set publishing status to "In production", or the refresh token
        this script gives you will stop working after 7 days.
-    3. Credentials -> Create OAuth client ID -> Web application
+    4. Credentials -> Create OAuth client ID -> Web application
        Authorised redirect URI: ${REDIRECT_URI}
 `);
   process.exit(1);

@@ -436,9 +436,9 @@ function NotificationTest() {
           <li className="flex gap-1.5">{mark(result.inApp.ok)}<span>In-app: {result.inApp.ok ? 'the bell has it' : 'did not arrive'}</span></li>
           <li className="flex gap-1.5">{mark(result.email.ok)}<span>
             Email to {result.email.to}: {!result.email.configured
-              ? 'not set up on this install (SMTP)'
+              ? 'no mail route is set up on this install'
               : result.email.ok
-                ? 'sent — check your inbox'
+                ? `sent via ${result.email.route === 'gmail-api' ? 'the Gmail API' : 'SMTP'} — check your inbox`
                 : 'failed'}
             {!result.email.ok && result.email.error && (
               // The mail server's own words. Nearly every failure here is a

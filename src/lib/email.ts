@@ -13,12 +13,35 @@ import type { Transporter } from 'nodemailer';
  *   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM, APP_URL
  */
 
+/*
+ * Two ways out, tried in that order.
+ *
+ * The Gmail API goes over HTTPS to the same host the calendar integration
+ * already reaches, which is the whole point: SMTP needs a name lookup and a
+ * long-lived socket on port 587, and in a serverless container both are
+ * fragile — a lookup that answers EBUSY never reaches Gmail at all, and no
+ * amount of retrying makes a wedged resolver work. An HTTPS request has none
+ * of that surface, and it costs nothing extra: the same Google account, the
+ * same OAuth client, one more scope.
+ *
+ * SMTP stays as the fallback for installs that never set Google up.
+ */
 const HOST = process.env.SMTP_HOST ?? '';
 const PORT = Number(process.env.SMTP_PORT ?? 587);
 const USER = process.env.SMTP_USER ?? '';
 const PASS = process.env.SMTP_PASS ?? '';
 
-export const emailEnabled = Boolean(HOST && USER && PASS);
+const smtpEnabled = Boolean(HOST && USER && PASS);
+
+/** The Gmail API needs the same credentials the calendar already uses. */
+const gmailApiEnabled = Boolean(
+  process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN
+);
+
+export const emailEnabled = gmailApiEnabled || smtpEnabled;
+
+/** Which route a send actually took, so the self-test can say. */
+export type MailRoute = 'gmail-api' | 'smtp' | 'none';
 
 export const appUrl = (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
 
@@ -147,6 +170,107 @@ export interface MailOutcome {
   ok: boolean;
   /** Why it failed, in words a person can act on. Absent when it worked. */
   error?: string;
+  /** How it went out, or would have. */
+  route?: MailRoute;
+}
+
+/* ------------------------------------------------------------------ */
+/* Gmail over HTTPS                                                    */
+/* ------------------------------------------------------------------ */
+
+const GMAIL_SEND_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
+
+/** RFC 2047, so a subject with an accent in it does not arrive as mojibake. */
+function encodeHeader(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x00-\x7f]*$/.test(value)) return value;
+  return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
+}
+
+/** One MIME message: the plain part for mail readers that want it, then the HTML. */
+function buildMime(mail: Mail, html: string, text: string): string {
+  const boundary = `flow_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
+  return [
+    `From: ${FROM}`,
+    `To: ${mail.to}`,
+    `Subject: ${encodeHeader(mail.subject)}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(text, 'utf8').toString('base64'),
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(html, 'utf8').toString('base64'),
+    '',
+    `--${boundary}--`,
+    '',
+  ].join('\r\n');
+}
+
+async function sendViaGmail(mail: Mail): Promise<MailOutcome> {
+  const { accessToken } = await import('./googleCalendar');
+  const { html, text } = render(mail);
+
+  let token: string;
+  try {
+    token = await accessToken();
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    return { ok: false, route: 'gmail-api', error: `Google would not issue a token: ${raw}` };
+  }
+
+  const raw = Buffer.from(buildMime(mail, html, text), 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  try {
+    const res = await fetch(GMAIL_SEND_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ raw }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (res.ok) return { ok: true, route: 'gmail-api' };
+
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string; status?: string } };
+    const message = body.error?.message ?? `Gmail answered ${res.status}`;
+
+    /*
+     * The one failure somebody has to act on: the refresh token was minted
+     * for the calendar alone, so Gmail refuses it. Re-running the auth helper
+     * with the send scope is the whole fix, and saying so beats a status code.
+     */
+    if (res.status === 403 && /scope/i.test(message)) {
+      return {
+        ok: false,
+        route: 'gmail-api',
+        error:
+          'The Google account is authorised for Calendar but not for sending mail. Add the gmail.send scope in the ' +
+          'OAuth consent screen, run "npm run google:auth" again, and replace GOOGLE_REFRESH_TOKEN with the new one. ' +
+          `[${message}]`,
+      };
+    }
+    if (res.status === 401) {
+      return { ok: false, route: 'gmail-api', error: `Google rejected the token — re-run "npm run google:auth". [${message}]` };
+    }
+    return { ok: false, route: 'gmail-api', error: message };
+  } catch (err) {
+    return {
+      ok: false,
+      route: 'gmail-api',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /**
@@ -157,10 +281,19 @@ export interface MailOutcome {
  * identical from the outside, and both are one-line fixes once named.
  */
 export async function sendMailDetailed(mail: Mail): Promise<MailOutcome> {
-  const tx = emailEnabled ? transport(await dialAddress()) : null;
+  // Gmail over HTTPS first: no name lookup on a mail host, no port 587, and
+  // no socket held open — which is the whole class of failure this avoids.
+  let gmail: MailOutcome | null = null;
+  if (gmailApiEnabled) {
+    gmail = await sendViaGmail(mail);
+    if (gmail.ok) return gmail;
+    console.warn('[email] gmail api failed, falling back to smtp:', gmail.error);
+  }
+
+  const tx = smtpEnabled ? transport(await dialAddress()) : null;
   if (!tx) {
-    console.info(`[email] skipped (SMTP not configured): "${mail.subject}" -> ${mail.to}`);
-    return { ok: false, error: 'SMTP is not configured on this server' };
+    console.info(`[email] not sent: "${mail.subject}" -> ${mail.to}`);
+    return gmail ?? { ok: false, route: 'none', error: 'No mail route is configured on this server' };
   }
 
   const { html, text } = render(mail);
@@ -176,7 +309,7 @@ export async function sendMailDetailed(mail: Mail): Promise<MailOutcome> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       await tx.sendMail({ from: FROM, to: mail.to, subject: mail.subject, html, text });
-      return { ok: true };
+      return { ok: true, route: 'smtp' };
     } catch (err) {
       last = err instanceof Error ? err.message : String(err);
       const code = (err as { code?: string }).code ?? '';
@@ -191,7 +324,11 @@ export async function sendMailDetailed(mail: Mail): Promise<MailOutcome> {
   }
 
   console.error('[email] send failed:', last);
-  return { ok: false, error: explain(last) };
+  // Both roads failed: name the one that is actually fixable.
+  if (gmail && !gmail.ok) {
+    return { ok: false, route: 'gmail-api', error: `${gmail.error} — and SMTP also failed: ${explain(last)}` };
+  }
+  return { ok: false, route: 'smtp', error: explain(last) };
 }
 
 /** Worth trying again: the network blinked, rather than the server saying no. */

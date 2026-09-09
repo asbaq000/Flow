@@ -232,7 +232,7 @@ export interface Message {
 /** What the profile page shows after "send me a test". */
 export interface NotificationTestResult {
   inApp: { ok: boolean };
-  email: { configured: boolean; ok: boolean; to: string; error?: string };
+  email: { configured: boolean; ok: boolean; to: string; error?: string; route?: 'gmail-api' | 'smtp' | 'none' };
   push: { configured: boolean; devices: number; sent: number; ok: boolean };
   slack: { configured: boolean; ok: boolean };
 }

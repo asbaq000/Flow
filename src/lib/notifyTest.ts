@@ -45,7 +45,7 @@ export async function testNotificationChannels(user: User): Promise<Notification
 
   return {
     inApp: { ok: inApp },
-    email: { configured: emailEnabled, ok: email.ok, error: email.error, to: user.email },
+    email: { configured: emailEnabled, ok: email.ok, error: email.error, route: email.route, to: user.email },
     push: { configured: pushEnabled, devices: push.devices, sent: push.sent, ok: push.sent > 0 },
     slack: { configured: slackEnabled, ok: slack },
   };

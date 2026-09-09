@@ -48,7 +48,7 @@ declare global {
  * every request a warm instance serves. Refreshing on each call would add a
  * round trip to Google before the round trip that does the actual work.
  */
-async function accessToken(): Promise<string> {
+export async function accessToken(): Promise<string> {
   const cached = global.__flow_google_token__;
   // A minute of slack, so a token cannot expire mid-flight.
   if (cached && cached.expiresAt > Date.now() + 60_000) return cached.value;
