@@ -8,11 +8,11 @@ import {
 import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { CalendarDays, GitBranch, Link2, MessageSquare, Plus, Split } from 'lucide-react';
+import { CalendarDays, Check, Maximize2, MessageSquare, MoreVertical, Paperclip, Plus, Split } from 'lucide-react';
 import type { Priority, Status, TaskFull, User } from '@/lib/types';
 import { PRIORITIES, STATUSES, docToPlain } from '@/lib/types';
 import { canAssign, canChangeStatus, canSplit } from '@/lib/permissions';
-import { Avatar, AvatarStack, PriorityBars } from '../ui';
+import { AvatarStack, Popover } from '../ui';
 import type { GroupBy } from '../Workspace';
 import { dueMeta } from './shared';
 
@@ -323,113 +323,144 @@ export function TaskCard({
   const due = dueMeta(task.due_date, task.status);
   const doneSubs = task.subtasks.filter((s) => s.status === 'DONE').length;
   const splitPeople = task.subtasks.map((s) => s.assignee).filter(Boolean) as User[];
-  const note = docToPlain(task.description).split('\n').find((l) => l.trim())?.slice(0, 140);
+  const note = docToPlain(task.description).split('\n').find((l) => l.trim())?.slice(0, 120);
+  const priorityColor = PRIORITIES.find((p) => p.id === task.priority)!.color;
+
+  // A split task reads its progress off its pieces; anything else off its
+  // own last report. Either way the card shows one number and one row of dots.
+  const percent = task.subtasks.length
+    ? Math.round((doneSubs / task.subtasks.length) * 100)
+    : task.status === 'DONE' ? 100 : task.progress;
+  const showProgress = task.subtasks.length > 0 || task.progress > 0 || task.status === 'DONE';
+
+  const files = task.attachments.length + task.links.length;
+  const people = splitPeople.length ? splitPeople : task.assignee ? [task.assignee] : [];
 
   return (
     <article
       onClick={onOpen}
-      className={`card pri-${task.priority} cursor-pointer p-3 transition-all hover:-translate-y-px hover:shadow-md`}
+      className={`card pri-${task.priority} cursor-pointer p-3.5 transition-all hover:-translate-y-px hover:shadow-md`}
     >
-      {task.tags.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1">
-          {task.tags.slice(0, 3).map((t) => (
+      {/* tags, and the menu that sits opposite them */}
+      <div className="mb-2 flex items-start gap-1">
+        <div className="flex min-w-0 flex-wrap gap-1">
+          <span className="on-tint rounded-md px-1.5 py-px font-mono text-[10px] font-medium tabular-nums">
+            TSK-{task.seq}
+          </span>
+          {task.tags.slice(0, 2).map((t) => (
             <span key={t.id} className="on-tint rounded-md px-1.5 py-px text-[10.5px] font-medium">
               #{t.name}
             </span>
           ))}
         </div>
-      )}
+        <span className="ml-auto shrink-0" onClick={(e) => e.stopPropagation()}>
+          <Popover
+            width={190}
+            trigger={({ toggle }) => (
+              <button
+                onClick={(e) => { e.stopPropagation(); toggle(); }}
+                className="-mr-1 -mt-0.5 rounded p-0.5 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"
+                aria-label="Task actions"
+              >
+                <MoreVertical size={14} />
+              </button>
+            )}
+          >
+            {(close) => (
+              <>
+                <button className="menu-item" onClick={() => { close(); onOpen(); }}>
+                  <Maximize2 size={13} /> Open task
+                </button>
+                {canSplit(me, task) && !task.subtasks.length && (
+                  <button className="menu-item" onClick={() => { close(); onSplit(); }}>
+                    <Split size={13} /> Split it up
+                  </button>
+                )}
+              </>
+            )}
+          </Popover>
+        </span>
+      </div>
 
       <p
         className={`text-[13.5px] font-semibold leading-snug ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}
       >
         {task.title}
       </p>
-      {/* The first line of the brief, the way the reference shows a "Note:". */}
+
+      {/* The pieces, ticked off — the shape the reference gives a checklist. */}
+      {task.subtasks.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {task.subtasks.slice(0, 4).map((sub) => {
+            const done = sub.status === 'DONE';
+            return (
+              <li key={sub.id} className="flex items-center gap-1.5 text-[11.5px] leading-snug">
+                <span
+                  className="grid h-[13px] w-[13px] shrink-0 place-items-center rounded-full border"
+                  style={{
+                    background: done ? priorityColor : 'transparent',
+                    borderColor: done ? priorityColor : 'var(--border-strong)',
+                  }}
+                >
+                  {done && <Check size={8} strokeWidth={3.5} className="text-white" />}
+                </span>
+                <span className={`truncate ${done ? 'text-[var(--text-tertiary)] line-through' : ''}`}>
+                  {sub.title}
+                </span>
+              </li>
+            );
+          })}
+          {task.subtasks.length > 4 && (
+            <li className="pl-[19px] text-[11px] text-[var(--text-tertiary)]">
+              +{task.subtasks.length - 4} more
+            </li>
+          )}
+        </ul>
+      )}
+
       {note && (
-        <p className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-[var(--text-secondary)]">
+        <p className="mt-1.5 line-clamp-2 text-[11.5px] leading-snug text-[var(--text-secondary)]">
           <span className="font-medium">Note:</span> {note}
         </p>
       )}
 
-      {task.subtasks.length > 0 ? (
-        <div className="mt-2.5">
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-[var(--text-secondary)]">
-            <GitBranch size={11} />
-            Split across {task.subtasks.length}
-            <span className="ml-auto font-mono text-[11px] tabular-nums">
-              {doneSubs}/{task.subtasks.length}
-            </span>
-          </div>
-          <Pips
-            done={doneSubs}
-            total={task.subtasks.length}
-            color={doneSubs === task.subtasks.length ? 'var(--s-done-dot)' : 'var(--accent)'}
-          />
-        </div>
-      ) : (
-        /* Progress only means something once work has actually started. */
-        task.progress > 0 && task.status !== 'DONE' && (
-          <div className="mt-2.5">
-            <div className="mb-1.5 flex items-center text-[11.5px] text-[var(--text-secondary)]">
-              Progress
-              <span className="ml-auto font-mono text-[11px] tabular-nums">{task.progress}%</span>
-            </div>
-            <Pips done={Math.round(task.progress / 10)} total={10} color="var(--accent)" />
-          </div>
-        )
+      {/* Overdue is the one thing worth interrupting the card's calm for. */}
+      {due?.urgent && (
+        <p className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium" style={{ color: due.color }}>
+          <CalendarDays size={10} /> {due.label}
+        </p>
       )}
 
-      <footer className="mt-2.5 flex items-center gap-2">
-        <PriorityBars priority={task.priority} />
+      {showProgress && (
+        <div className="mt-3">
+          <div className="mb-1.5 flex items-baseline text-[11.5px] text-[var(--text-secondary)]">
+            Progress
+            <span className="ml-auto font-mono text-[11px] font-medium tabular-nums text-[var(--text)]">
+              {percent}%
+            </span>
+          </div>
+          <Pips done={Math.round((percent / 100) * 20)} total={20} color={priorityColor} dots />
+        </div>
+      )}
 
-        {due && (
-          <span className="inline-flex items-center gap-1 rounded-md px-1.5 py-px text-[10.5px] font-medium" style={{ color: due.color, background: 'rgba(255,255,255,0.6)' }}>
-            <CalendarDays size={10} />
-            {due.label}
-          </span>
-        )}
+      <footer className="mt-3 flex items-center gap-2">
+        {people.length > 0 && <AvatarStack users={people} max={3} />}
+
+        <span className="flex-1" />
 
         {task.comment_count > 0 && (
-          <span className="inline-flex items-center gap-0.5 font-mono text-[11px] tabular-nums text-[var(--text-tertiary)]">
+          <span className="inline-flex items-center gap-1 font-mono text-[11px] tabular-nums text-[var(--text-secondary)]">
             <MessageSquare size={11} />
             {task.comment_count}
           </span>
         )}
-
-        {task.links.length > 0 && (
-          <span className="inline-flex items-center gap-0.5 text-[11px] text-[var(--text-tertiary)]">
-            <Link2 size={11} />
-            {task.links.length}
+        {files > 0 && (
+          <span className="inline-flex items-center gap-1 font-mono text-[11px] tabular-nums text-[var(--text-secondary)]">
+            <Paperclip size={11} />
+            {files}
           </span>
         )}
-
-        <span className="flex-1" />
-
-        {canSplit(me, task) && !task.subtasks.length && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onSplit();
-            }}
-            className="rounded p-0.5 text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-hover)] hover:text-[var(--text)] group-hover:opacity-100"
-            style={{ opacity: undefined }}
-            title="Split across devs"
-          >
-            <Split size={12} />
-          </button>
-        )}
-
-        {splitPeople.length > 0 ? (
-          <AvatarStack users={splitPeople} max={3} />
-        ) : (
-          <Avatar user={task.assignee} size="xs" />
-        )}
       </footer>
-
-      <div className="mt-2 font-mono text-[10.5px] tabular-nums text-[var(--text-tertiary)]">
-        TSK-{task.seq}
-      </div>
     </article>
   );
 }
@@ -439,9 +470,11 @@ export function TaskCard({
  * ten segments say that honestly where a smooth bar implies a precision
  * nobody actually has.
  */
-function Pips({ done, total, color }: { done: number; total: number; color: string }) {
+function Pips({ done, total, color, dots = false }: {
+  done: number; total: number; color: string; dots?: boolean;
+}) {
   return (
-    <div className="pips" role="img" aria-label={`${done} of ${total} complete`}>
+    <div className={`pips${dots ? ' dots' : ''}`} role="img" aria-label={`${done} of ${total} complete`}>
       {Array.from({ length: total }, (_, i) => (
         <span key={i} className="pip" data-on={i < done} style={{ '--pip': color } as React.CSSProperties} />
       ))}

@@ -325,6 +325,28 @@ body {
   background: var(--pip, var(--accent));
 }
 
+/*
+ * The board's own reading of progress: a row of small circles rather than
+ * segments of a bar. Twenty of them, so one dot is five per cent and the
+ * count is legible at a glance without anybody reading the number.
+ */
+.pips.dots {
+  gap: 3px;
+}
+.pips.dots .pip {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--pip-off, rgba(0, 0, 0, 0.09));
+}
+[data-theme='dark'] .pips.dots .pip {
+  background: rgba(255, 255, 255, 0.13);
+}
+.pips.dots .pip[data-on='true'] {
+  background: var(--pip, var(--accent));
+}
+
 .menu {
   background: var(--bg-panel);
   border: 1px solid var(--border);

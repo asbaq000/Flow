@@ -3,7 +3,11 @@ import type { Status } from '@/lib/types';
 const DAY = 86_400_000;
 
 /** Human due-date label plus an urgency colour. Returns null when there is no date. */
-export function dueMeta(due: number | null, status: Status): { label: string; color: string } | null {
+/** `urgent` marks the dates worth interrupting a calm card for: late, or all but. */
+export function dueMeta(
+  due: number | null,
+  status: Status
+): { label: string; color: string; urgent: boolean } | null {
   if (!due) return null;
 
   const today = new Date();
@@ -13,13 +17,13 @@ export function dueMeta(due: number | null, status: Status): { label: string; co
   const days = Math.round((target.getTime() - today.getTime()) / DAY);
 
   const neutral = 'var(--text-tertiary)';
-  if (status === 'DONE') return { label: formatDay(target), color: neutral };
+  if (status === 'DONE') return { label: formatDay(target), color: neutral, urgent: false };
 
-  if (days < 0) return { label: days === -1 ? 'Yesterday' : `${Math.abs(days)}d overdue`, color: '#e03e3e' };
-  if (days === 0) return { label: 'Today', color: '#d9730d' };
-  if (days === 1) return { label: 'Tomorrow', color: '#d9730d' };
-  if (days <= 7) return { label: `${days}d left`, color: 'var(--text-secondary)' };
-  return { label: formatDay(target), color: neutral };
+  if (days < 0) return { label: days === -1 ? 'Yesterday' : `${Math.abs(days)}d overdue`, color: '#e03e3e', urgent: true };
+  if (days === 0) return { label: 'Today', color: '#d9730d', urgent: true };
+  if (days === 1) return { label: 'Tomorrow', color: '#d9730d', urgent: true };
+  if (days <= 7) return { label: `${days}d left`, color: 'var(--text-secondary)', urgent: false };
+  return { label: formatDay(target), color: neutral, urgent: false };
 }
 
 export function formatDay(d: Date): string {
