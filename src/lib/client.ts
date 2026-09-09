@@ -319,7 +319,7 @@ export const api = {
     exportUrl: (userId: string) => `/api/users/${userId}/export`,
   },
   org: {
-    get: () => request<{ org: Organization }>('/api/org'),
+    get: () => request<{ org: Organization; seatVacant: boolean }>('/api/org'),
     update: (body: { name?: string; rotateInvite?: boolean; rotateLeadInvite?: boolean }) =>
       request<{ org: Organization }>('/api/org', { method: 'PATCH', body: JSON.stringify(body) }),
   },

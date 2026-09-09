@@ -6,6 +6,8 @@ import type { TaskFull, User } from '@/lib/types';
 import { MAX_ATTACHMENT_BYTES, docFromText } from '@/lib/types';
 import { api } from '@/lib/client';
 import { Avatar, Modal, UserPicker } from './ui';
+import { VoiceRecorder } from './VoiceNotes';
+import { Mic } from 'lucide-react';
 
 interface Piece {
   key: number;
@@ -15,11 +17,13 @@ interface Piece {
   assigneeId: string | null;
   /** Files that belong to this piece alone, uploaded once it exists. */
   files: File[];
+  /** And a recording, for when saying it is faster than typing it. */
+  voice: { blob: Blob; durationMs: number; url: string }[];
 }
 
 let nextKey = 1;
 const makePiece = (title = ''): Piece =>
-  ({ key: nextKey++, title, description: '', assigneeId: null, files: [] });
+  ({ key: nextKey++, title, description: '', assigneeId: null, files: [], voice: [] });
 
 export default function SplitModal({
   task, me, users, canAssign, onClose, onSplit,
@@ -73,7 +77,7 @@ export default function SplitModal({
        * upload must not undo the split — the work is already assigned, and
        * the document can be added again from the task itself.
        */
-      const withFiles = filled.filter((p) => p.files.length);
+      const withFiles = filled.filter((p) => p.files.length || p.voice.length);
       if (withFiles.length) {
         setUploading(true);
         const failed: string[] = [];
@@ -85,6 +89,13 @@ export default function SplitModal({
               await api.attachments.upload(created.id, file);
             } catch {
               failed.push(`${file.name} → ${piece.title.trim()}`);
+            }
+          }
+          for (const rec of piece.voice) {
+            try {
+              await api.voice.upload(created.id, rec.blob, rec.durationMs);
+            } catch {
+              failed.push(`a recording → ${piece.title.trim()}`);
             }
           }
         }
@@ -130,22 +141,9 @@ export default function SplitModal({
         </>
       }
     >
-      <div className="mb-4 rounded-md border px-3 py-2.5" style={{ background: 'var(--bg-subtle)' }}>
+      <div className="mb-4 rounded-md border px-3 py-2" style={{ background: 'var(--bg-subtle)' }}>
         <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">Parent task</div>
         <div className="mt-0.5 text-[14px] font-medium">{task.title}</div>
-        <p className="mt-1.5 text-[12.5px] text-[var(--text-secondary)]">
-          {stages ? (
-            <>
-              Each stage becomes its own task, assigned to you, that you can hand in on its own — frontend today,
-              backend tomorrow, deployment after that. This task stays as the umbrella over all of them.
-            </>
-          ) : (
-            <>
-              Each piece becomes its own task assigned to one developer. The parent stays as the umbrella and tracks
-              progress across all of them.
-            </>
-          )}
-        </p>
       </div>
 
       <div className="mb-2 flex items-center justify-between">
@@ -226,6 +224,29 @@ export default function SplitModal({
                   </button>
                 </span>
               ))}
+              {piece.voice.map((rec) => (
+                <span key={rec.url} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]">
+                  <Mic size={10} className="shrink-0 text-[var(--text-tertiary)]" />
+                  {Math.round(rec.durationMs / 1000)}s
+                  <button
+                    onClick={() => {
+                      URL.revokeObjectURL(rec.url);
+                      update(piece.key, { voice: piece.voice.filter((x) => x !== rec) });
+                    }}
+                    className="shrink-0 text-[var(--text-tertiary)] hover:text-red-500"
+                    aria-label="Remove recording"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+              <VoiceRecorder
+                compact
+                label="Voice note"
+                onRecorded={(blob, durationMs) =>
+                  update(piece.key, { voice: [...piece.voice, { blob, durationMs, url: URL.createObjectURL(blob) }] })
+                }
+              />
               <label className="inline-flex cursor-pointer items-center gap-1 text-[11.5px] text-[var(--text-tertiary)] hover:text-[var(--text)]">
                 <Paperclip size={11} />
                 {piece.files.length ? 'Add another file' : 'Attach a file'}

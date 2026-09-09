@@ -1500,6 +1500,38 @@ console.log('\nSigning in says which half is wrong');
                            role: 'DEV', inviteCode: INVITE }) })).status === 400);
 }
 
+console.log('\nAn organisation can be running before its CEO arrives');
+{
+  // Ours has one, so the door is shut.
+  const outsider = await signup(`ceoprobe-${RUN}@e2e.local`, 'Probe', 'TEAM_LEAD', { inviteCode: INVITE });
+  ok('a filled seat is reported as filled', (await call(outsider, '/api/org')).body.seatVacant === false);
+  ok('and signing up as CEO into it is refused', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `ceodupe-${RUN}@e2e.local`, password: PW, name: 'Second Chief',
+                           role: 'CEO', inviteCode: INVITE }) })).status === 403);
+
+  // A brand new organisation always has one, so the only way to see the other
+  // side of this is an organisation created without a founder — which is what
+  // an install upgraded from before organisations looks like.
+  const born = await signup(`freshceo-${RUN}@e2e.local`, 'Fresh Chief', 'MANAGER', { orgName: `Fresh Org ${RUN}` });
+  ok('founding one still makes you its CEO', born.user.role === 'CEO', born.user.role);
+  const freshOrg = (await call(born, '/api/org')).body.org;
+  ok('a new organisation starts with the shelf of tags',
+     (await call(born, '/api/tags')).body.tags?.length >= 15,
+     String((await call(born, '/api/tags')).body.tags?.length));
+  const names = (await call(born, '/api/tags')).body.tags.map((t) => t.name);
+  ok('they cover the web side', ['frontend', 'backend', 'api', 'database'].every((n) => names.includes(n)),
+     names.join(','));
+  ok('and the model side', ['ai-model', 'prompt', 'dataset', 'rag'].every((n) => names.includes(n)));
+  ok('the developer code still cannot make a CEO', (await fetch(`${BASE}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `devcodeceo-${RUN}@e2e.local`, password: PW, name: 'Nope',
+                           role: 'CEO', inviteCode: freshOrg.lead_invite_code }) })).status === 403);
+
+  const who = (await call(ceo, '/api/users')).body.users.find((u) => u.email === `ceoprobe-${RUN}@e2e.local`);
+  if (who) await call(ceo, `/api/users/${who.id}`, { method: 'DELETE' });
+}
+
 console.log('\nOrganisations are walls');
 {
   const other = await signup(`other-ceo-${RUN}@e2e.local`, 'Other Chief', 'MANAGER', { orgName: `Other Org ${RUN}` });

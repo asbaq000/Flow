@@ -57,7 +57,7 @@ export default function ListView({ tasks, users, me, onOpen, onUpdate }: Props) 
               </button>
 
               {!isCollapsed && (
-                <div className="overflow-hidden rounded-md border">
+                <div className="stagger overflow-hidden rounded-md border">
                   {group.items.map((task, i) => (
                     <Row
                       key={task.id}

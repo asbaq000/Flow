@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import type { User } from '@/lib/types';
 import type { Section } from './Workspace';
-import { Avatar } from './ui';
+import { Avatar, FlowMark } from './ui';
 
 interface Props {
   /** On phones the sidebar floats over the board instead of sitting beside it. */
@@ -101,26 +101,26 @@ export default function Sidebar({
       }
       style={{ background: 'var(--bg-sidebar)' }}
     >
-      {/* brand */}
+      {/* brand — and the way back to the board from anywhere */}
       <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
-        <span
-          className="grid h-8 w-8 place-items-center rounded-[10px] text-[15px] font-bold"
-          style={{
-            background: 'linear-gradient(140deg, var(--accent) 0%, #8e7bff 100%)',
-            color: 'var(--on-accent)',
-            boxShadow: '0 4px 12px rgba(108, 92, 231, 0.32)',
-          }}
+        <button
+          onClick={() => { window.location.href = '/workspace'; }}
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left transition-opacity hover:opacity-80"
+          title="Back to the board"
+          aria-label="Flow — back to the board"
         >
-          F
-        </span>
+          <span className="shrink-0" style={{ filter: 'drop-shadow(0 4px 12px rgba(108, 92, 231, 0.32))' }}>
+            <FlowMark size={32} />
+          </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-[17px] font-bold leading-tight tracking-tight">flow</span>
+          <span className="font-display block text-[19px] leading-tight">Flow</span>
           {orgName && (
             <span className="block truncate text-[11px] leading-tight text-[var(--text-tertiary)]" title={orgName}>
               {orgName}
             </span>
           )}
         </span>
+        </button>
         <button onClick={onCollapse} className="btn btn-ghost px-1" aria-label="Hide menu">
           <ChevronsLeft size={15} />
         </button>

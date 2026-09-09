@@ -2,14 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import {
-  ArrowLeft, ArrowRight, Check, Info, Link2, Loader2, Mic, Paperclip, Plus, Split, UserRound,
-  Wand2, X,
+  ArrowLeft, ArrowRight, Check, Link2, Loader2, Mic, Paperclip, Plus, Split, UserRound, Wand2, X,
 } from 'lucide-react';
 import type { Block, Priority, Tag, TaskFull, User } from '@/lib/types';
 import { DEFAULT_PRIORITY, MAX_ATTACHMENT_BYTES, docFromText, emptyDoc } from '@/lib/types';
 import { api, serializeDoc } from '@/lib/client';
 import { canChooseAssigneeAtCreation } from '@/lib/permissions';
-import { Modal, PriorityPicker, TagChip, UserPicker } from './ui';
+import { Modal, PriorityChoice, TagChip, UserPicker } from './ui';
 import { VoiceRecorder } from './VoiceNotes';
 import { fileSize } from './Attachments';
 import { appendTranscriptToDescription, autoTranscribe, useTranscriber } from '@/lib/useTranscriber';
@@ -22,12 +21,23 @@ interface Piece {
   title: string;
   description: string;
   assigneeId: string | null;
+  /** Each piece carries its own documents and its own recordings. */
+  files: File[];
+  voice: { blob: Blob; durationMs: number; url: string }[];
 }
 
 let nextKey = 1;
-const makePiece = (): Piece => ({ key: nextKey++, title: '', description: '', assigneeId: null });
+const makePiece = (): Piece =>
+  ({ key: nextKey++, title: '', description: '', assigneeId: null, files: [], voice: [] });
 
-const STEPS = ['The task', 'Priority & timing', 'Who does it'] as const;
+/** Unset dates land at six in the evening, the day the task was raised. */
+function defaultDue(): number {
+  const at6 = new Date();
+  at6.setHours(18, 0, 0, 0);
+  // Raised after six? Tomorrow evening, rather than born overdue.
+  if (at6.getTime() <= Date.now()) at6.setDate(at6.getDate() + 1);
+  return at6.getTime();
+}
 
 /**
  * Raising a task, one question at a time.
@@ -73,12 +83,10 @@ export default function NewTaskModal({
   // A Lead can name the developer here; for everyone else routing is not a choice.
   const canAssign = canChooseAssigneeAtCreation(me);
   const devs = users.filter((u) => u.role === 'DEV');
-  const routingLead =
-    users.find((u) => u.role === 'TEAM_LEAD' && u.id !== me.id) ??
-    users.find((u) => u.role === 'TEAM_LEAD') ??
-    null;
   const filledPieces = pieces.filter((p) => p.title.trim());
   const splitting = canAssign && handover === 'split';
+  // Nobody without the authority to hand work out is asked who does it.
+  const steps = canAssign ? ['The task', 'Priority & timing', 'Who does it'] : ['The task', 'Priority & timing'];
 
   useEffect(() => {
     if (!open) return;
@@ -123,7 +131,7 @@ export default function NewTaskModal({
         description: serializeDoc(doc),
         priority,
         assigneeId: canAssign && !splitting ? assigneeId : undefined,
-        dueDate: fromDateInput(due),
+        dueDate: fromDateInput(due) ?? defaultDue(),
         links: links.filter((l) => l.url.trim()),
         tagIds,
       });
@@ -166,6 +174,34 @@ export default function NewTaskModal({
             }))
           );
           finalTask = afterSplit;
+
+          /*
+           * A piece only becomes a real task when the split lands, so its
+           * documents and recordings follow, matched back by title. One that
+           * fails must not undo the split — the work is already handed out.
+           */
+          for (const piece of filledPieces) {
+            if (!piece.files.length && !piece.voice.length) continue;
+            const made = afterSplit.subtasks.find((sub) => sub.title === piece.title.trim());
+            if (!made) { failed.push(piece.title.trim()); continue; }
+            for (const file of piece.files) {
+              try {
+                await api.attachments.upload(made.id, file);
+              } catch {
+                failed.push(`${file.name} → ${piece.title.trim()}`);
+              }
+            }
+            for (const rec of piece.voice) {
+              try {
+                const { voiceNote } = await api.voice.upload(made.id, rec.blob, rec.durationMs);
+                void autoTranscribe(voiceNote.id, rec.blob, transcribe, (text) =>
+                  appendTranscriptToDescription(made.id, text)
+                );
+              } catch {
+                failed.push(`a recording → ${piece.title.trim()}`);
+              }
+            }
+          }
         } catch (err) {
           setError(
             `The task was created, but the split did not go through: ${
@@ -191,7 +227,7 @@ export default function NewTaskModal({
     }
   };
 
-  const last = step === STEPS.length - 1;
+  const last = step === steps.length - 1;
 
   return (
     <Modal
@@ -202,7 +238,7 @@ export default function NewTaskModal({
         <span className="flex items-center gap-2.5">
           New task
           <span className="text-[12px] font-normal text-[var(--text-tertiary)]">
-            Step {step + 1} of {STEPS.length} · {STEPS[step]}
+            Step {step + 1} of {steps.length} · {steps[step]}
           </span>
         </span>
       }
@@ -247,8 +283,10 @@ export default function NewTaskModal({
         }}
       >
         {/* where it lands — the rule made visible, or the choice offered */}
-        <Stepper step={step} onStep={(s) => (s < step || canLeaveStep) && setStep(s)} />
+        <Stepper steps={steps} step={step} onStep={(s) => (s < step || canLeaveStep) && setStep(s)} />
 
+        {/* keyed so each step is a new element, and therefore animates in */}
+        <div key={step} className="animate-step">
         {step === 0 && (
           <>
             <label className="mb-1.5 block text-[12.5px] font-medium">Task</label>
@@ -415,12 +453,9 @@ export default function NewTaskModal({
 
         {step === 1 && (
           <>
-            <label className="mb-2 block text-[12.5px] font-medium">How urgent is it?</label>
+            <label className="mb-2 block text-[12.5px] font-medium">Priority</label>
             <div className="mb-5">
-              <PriorityPicker value={priority} onChange={setPriority} />
-              <p className="mt-1.5 text-[12px] text-[var(--text-tertiary)]">
-                This is the colour the card carries on the board, so it is worth being honest about.
-              </p>
+              <PriorityChoice value={priority} onChange={setPriority} />
             </div>
 
             <label className="mb-1.5 block text-[12.5px] font-medium">Due date</label>
@@ -428,8 +463,9 @@ export default function NewTaskModal({
               type="date"
               value={due}
               onChange={(e) => setDue(e.target.value)}
-              className="input mb-5 w-[200px] text-[13px]"
+              className="input w-[200px] text-[13px]"
             />
+            <p className="mb-5 mt-1 text-[12px] text-[var(--text-tertiary)]">Left empty: 6 pm today.</p>
 
             {tags.length > 0 && (
               <div>
@@ -455,28 +491,9 @@ export default function NewTaskModal({
           </>
         )}
 
-        {step === 2 && (
+        {step === 2 && canAssign && (
           <>
-            {!canAssign ? (
-              <div
-                className="flex items-start gap-2 rounded-md border px-3 py-2.5 text-[12.5px]"
-                style={{ background: 'var(--bg-subtle)' }}
-              >
-                <Info size={14} className="mt-0.5 shrink-0 text-[var(--accent)]" />
-                <p className="text-[var(--text-secondary)]">
-                  {routingLead ? (
-                    <>
-                      This goes to <strong className="text-[var(--text)]">{routingLead.name}</strong>, who decides who
-                      picks it up. Only a Team Lead assigns work onward, and only to a developer.
-                    </>
-                  ) : (
-                    <>No Team Lead exists yet, so this routes to the CEO to hand out.</>
-                  )}
-                </p>
-              </div>
-            ) : (
-              <>
-                <div className="mb-4 grid grid-cols-2 gap-2">
+            <div className="mb-4 grid grid-cols-2 gap-2">
                   <Choice
                     on={handover === 'one'}
                     icon={<UserRound size={15} />}
@@ -500,13 +517,8 @@ export default function NewTaskModal({
                       users={devs}
                       value={assigneeId}
                       onChange={setAssigneeId}
-                      label="Assign to a developer"
+                      label="Pick a developer"
                     />
-                    <p className="mt-1.5 text-[12px] text-[var(--text-tertiary)]">
-                      {assigneeId
-                        ? 'It starts on their desk in To Do, and they are told.'
-                        : 'Leave this empty and it waits on your desk until you hand it out.'}
-                    </p>
                   </div>
                 ) : (
                   <>
@@ -532,12 +544,12 @@ export default function NewTaskModal({
                               value={piece.title}
                               onChange={(e) => updatePiece(piece.key, { title: e.target.value })}
                             />
-                            <div className="w-[160px] shrink-0">
+                            <div className="shrink-0">
                               <UserPicker
                                 users={devs}
                                 value={piece.assigneeId}
                                 onChange={(id) => updatePiece(piece.key, { assigneeId: id })}
-                                label="Assign dev"
+                                label="Assign"
                               />
                             </div>
                             <button
@@ -559,6 +571,73 @@ export default function NewTaskModal({
                               value={piece.description}
                               onChange={(e) => updatePiece(piece.key, { description: e.target.value })}
                             />
+
+                            {/* Their documents and their recording — on their piece, not the parent. */}
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              {piece.files.map((f) => (
+                                <span
+                                  key={f.name + f.size}
+                                  className="inline-flex max-w-[190px] items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
+                                >
+                                  <Paperclip size={10} className="shrink-0 text-[var(--text-tertiary)]" />
+                                  <span className="truncate">{f.name}</span>
+                                  <button
+                                    onClick={() => updatePiece(piece.key, { files: piece.files.filter((x) => x !== f) })}
+                                    className="shrink-0 text-[var(--text-tertiary)] hover:text-red-500"
+                                    aria-label={`Remove ${f.name}`}
+                                  >
+                                    <X size={10} />
+                                  </button>
+                                </span>
+                              ))}
+                              {piece.voice.map((rec) => (
+                                <span
+                                  key={rec.url}
+                                  className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
+                                >
+                                  <Mic size={10} className="shrink-0 text-[var(--text-tertiary)]" />
+                                  {Math.round(rec.durationMs / 1000)}s
+                                  <button
+                                    onClick={() => {
+                                      URL.revokeObjectURL(rec.url);
+                                      updatePiece(piece.key, { voice: piece.voice.filter((x) => x !== rec) });
+                                    }}
+                                    className="shrink-0 text-[var(--text-tertiary)] hover:text-red-500"
+                                    aria-label="Remove recording"
+                                  >
+                                    <X size={10} />
+                                  </button>
+                                </span>
+                              ))}
+                              <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[11.5px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]">
+                                <Paperclip size={11} /> File
+                                <input
+                                  type="file"
+                                  multiple
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const picked = Array.from(e.target.files ?? []);
+                                    const tooBig = picked.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+                                    if (tooBig) {
+                                      setError(`"${tooBig.name}" is over ${fileSize(MAX_ATTACHMENT_BYTES)}.`);
+                                      return;
+                                    }
+                                    setError('');
+                                    updatePiece(piece.key, { files: [...piece.files, ...picked] });
+                                    e.target.value = '';
+                                  }}
+                                />
+                              </label>
+                              <VoiceRecorder
+                                compact
+                                label="Voice note"
+                                onRecorded={(blob, durationMs) =>
+                                  updatePiece(piece.key, {
+                                    voice: [...piece.voice, { blob, durationMs, url: URL.createObjectURL(blob) }],
+                                  })
+                                }
+                              />
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -581,8 +660,6 @@ export default function NewTaskModal({
                         A split needs at least two pieces with a title.
                       </p>
                     )}
-                  </>
-                )}
               </>
             )}
 
@@ -591,15 +668,17 @@ export default function NewTaskModal({
               <Check size={13} className="mr-1.5 inline text-[var(--accent)]" />
               <strong className="text-[var(--text)]">{title.trim() || 'Untitled'}</strong>
               {' · '}{priority.toLowerCase()}
-              {due ? ` · due ${due}` : ''}
+              {` · due ${due || 'today, 6 pm'}`}
               {files.length ? ` · ${files.length} file${files.length > 1 ? 's' : ''}` : ''}
               {pending.length ? ` · ${pending.length} recording${pending.length > 1 ? 's' : ''}` : ''}
             </div>
           </>
         )}
 
+        </div>
+
         {error && (
-          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+          <div className="animate-rise mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
             {error}
           </div>
         )}
@@ -608,11 +687,11 @@ export default function NewTaskModal({
   );
 }
 
-/** Three dots and a rule — where you are, and what is still to come. */
-function Stepper({ step, onStep }: { step: number; onStep: (s: number) => void }) {
+/** Dots and a rule — where you are, and what is still to come. */
+function Stepper({ steps, step, onStep }: { steps: string[]; step: number; onStep: (s: number) => void }) {
   return (
     <div className="mb-5 flex items-center gap-1.5">
-      {STEPS.map((label, i) => {
+      {steps.map((label, i) => {
         const done = i < step;
         const on = i === step;
         return (
@@ -637,7 +716,7 @@ function Stepper({ step, onStep }: { step: number; onStep: (s: number) => void }
             >
               {label}
             </span>
-            {i < STEPS.length - 1 && (
+            {i < steps.length - 1 && (
               <span className="h-px flex-1" style={{ background: done ? 'var(--accent)' : 'var(--border)' }} />
             )}
           </button>

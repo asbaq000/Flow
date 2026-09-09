@@ -1,6 +1,9 @@
 import { createSession, hashPassword, newId, setSessionCookie } from '@/lib/auth';
 import { one, run } from '@/lib/pg';
-import { createOrganization, findOrganizationByInvite, firstOrganization, getUser, invalidateUserCache } from '@/lib/store';
+import {
+  countByRole, createOrganization, findOrganizationByInvite, firstOrganization, getUser,
+  invalidateUserCache,
+} from '@/lib/store';
 import { fail, isValidEmail, ok, readJson } from '@/lib/api';
 import crypto from 'node:crypto';
 import { CODE_ROLES } from '@/lib/types';
@@ -66,6 +69,25 @@ export async function POST(req: Request) {
   } else if (inviteCode.trim()) {
     const match = await findOrganizationByInvite(inviteCode.trim());
     if (!match) return fail('That invite code is not valid', 403);
+
+    /*
+     * An organisation can be running before its CEO has an account — an
+     * install upgraded from before organisations existed has nobody in the
+     * seat at all. So the organisation code can create one, but only while
+     * it is empty: the moment somebody holds it this door closes on its own.
+     */
+    if (role === 'CEO') {
+      if (match.kind !== 'admin') {
+        return fail('The CEO seat needs the organisation code, not the developer one', 403);
+      }
+      if ((await countByRole('CEO', match.org.id)) > 0) {
+        return fail('That organisation already has a CEO', 403);
+      }
+      orgId = match.org.id;
+      finalRole = 'CEO';
+      return await create(orgId, finalRole);
+    }
+
     if (!VALID_ROLES.includes(role)) return fail('Pick a valid role');
     // Which code you were given is what decides the seat you can take. A Team
     // Lead's code only ever admits Developers, so a Lead can bring their own
@@ -90,25 +112,29 @@ export async function POST(req: Request) {
     return fail('Enter your organisation\'s invite code, or create a new organisation', 400);
   }
 
-  const countRow = await one<{ c: number }>('SELECT COUNT(*)::int AS c FROM users WHERE org_id = ?', [orgId]);
-  const userCount = countRow?.c ?? 0;
+  return await create(orgId, finalRole);
 
-  const id = newId('u_');
-  await run(
-    `INSERT INTO users (id, org_id, email, name, password_hash, role, avatar_color, title, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
-    [
-      id, orgId, cleanEmail, cleanName, hashPassword(password), finalRole,
-      AVATAR_COLORS[userCount % AVATAR_COLORS.length], null, Date.now(),
-    ]
-  );
+  async function create(org: string, seat: Role) {
+    const countRow = await one<{ c: number }>('SELECT COUNT(*)::int AS c FROM users WHERE org_id = ?', [org]);
+    const userCount = countRow?.c ?? 0;
 
-  invalidateUserCache();
+    const id = newId('u_');
+    await run(
+      `INSERT INTO users (id, org_id, email, name, password_hash, role, avatar_color, title, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [
+        id, org, cleanEmail, cleanName, hashPassword(password), seat,
+        AVATAR_COLORS[userCount % AVATAR_COLORS.length], null, Date.now(),
+      ]
+    );
 
-  const { token, expiresAt } = await createSession(id);
-  await setSessionCookie(token, expiresAt);
+    invalidateUserCache();
 
-  return ok({ user: await getUser(id), isFirstAccount: userCount === 0 }, 201);
+    const { token, expiresAt } = await createSession(id);
+    await setSessionCookie(token, expiresAt);
+
+    return ok({ user: await getUser(id), isFirstAccount: userCount === 0 }, 201);
+  }
 }
 
 /** Constant-time compare so the setup code cannot be guessed character by character. */

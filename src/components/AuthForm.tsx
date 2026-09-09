@@ -4,11 +4,16 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Camera, Check, Loader2, X } from 'lucide-react';
 import { ROLES } from '@/lib/types';
+import { FlowWordmark, FlowMark } from './ui';
 import type { Role } from '@/lib/types';
 
-// CEO and Manager are assigned by the CEO on the People page, never self-selected.
-// CEO is granted on the People page, never self-selected.
-const SIGNUP_ROLES = ROLES.filter((r) => r.id !== 'CEO');
+/*
+ * CEO is offered, but the server only accepts it for an organisation that has
+ * none — which is the case exactly once, and never again after somebody takes
+ * the seat. An organisation can be up and running before its CEO has an
+ * account, and without this there is no way for them to ever get one.
+ */
+const SIGNUP_ROLES = ROLES;
 
 export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boolean }) {
   const router = useRouter();
@@ -138,10 +143,7 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
       {/* ---- left: the pitch ---- */}
       <aside className="hidden w-[46%] flex-col justify-between p-12 lg:flex" style={{ background: 'var(--bg-sidebar)' }}>
         <div className="flex items-center gap-2.5">
-          <div className="grid h-8 w-8 place-items-center rounded-xl bg-[var(--accent)] text-[15px] font-bold text-[var(--on-accent)]">
-            F
-          </div>
-          <span className="text-[15px] font-semibold">Flow</span>
+          <FlowWordmark mark={32} text={20} />
         </div>
 
         <div className="max-w-md">
@@ -177,9 +179,7 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
       <main className="flex flex-1 items-center justify-center p-6">
         <div className="w-full max-w-[380px]">
           <div className="mb-8 lg:hidden">
-            <div className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--accent)] text-base font-bold text-[var(--on-accent)]">
-              F
-            </div>
+            <FlowMark size={36} />
           </div>
 
           <h2 className="text-[26px] font-bold tracking-tight">
@@ -384,7 +384,11 @@ export default function AuthForm({ isEmptyWorkspace }: { isEmptyWorkspace: boole
                       </div>
                       <div className="min-w-0">
                         <div className="text-[13px] font-medium">{r.label}</div>
-                        <div className="text-[12px] leading-snug text-[var(--text-secondary)]">{r.blurb}</div>
+                        <div className="text-[12px] leading-snug text-[var(--text-secondary)]">
+                          {r.id === 'CEO'
+                            ? 'Only for an organisation that has no CEO yet. Needs the organisation code.'
+                            : r.blurb}
+                        </div>
                       </div>
                     </button>
                   ))}

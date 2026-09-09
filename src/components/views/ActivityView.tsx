@@ -51,7 +51,7 @@ export default function ActivityView({ notifications, onOpen, onMarkAll, onMarkO
           [...days.entries()].map(([day, list]) => (
             <section key={day} className="mb-5">
               <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[var(--text-tertiary)]">{dayLabel(day)}</div>
-              <ul className="card divide-y">
+              <ul className="card stagger divide-y">
                 {list.map((n) => (
                   <li key={n.id}>
                     <button

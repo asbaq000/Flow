@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Bell, BellOff, Building2, Camera, Check, Copy, Download, KeyRound, Loader2, LogOut, Moon, RefreshCw,
-  Send, Sun, TrendingUp, X,
+  Bell, BellOff, Building2, Camera, Check, Copy, Crown, Download, KeyRound, Loader2, LogOut, Moon,
+  RefreshCw, Send, Sun, TrendingUp, X,
 } from 'lucide-react';
 import type { NotificationTestResult, Organization, TaskSheet, User } from '@/lib/types';
 import { api } from '@/lib/client';
@@ -223,13 +223,18 @@ function OrganizationCard({ me }: { me: User }) {
   const ceo = me.role === 'CEO';
   const lead = me.role === 'TEAM_LEAD';
   const [org, setOrg] = useState<Organization | null>(null);
+  const [vacant, setVacant] = useState(false);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState<'name' | 'admin' | 'lead' | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    api.org.get().then((d) => { setOrg(d.org); setName(d.org.name); }).catch(() => {});
+    api.org.get()
+      .then((d) => { setOrg(d.org); setName(d.org.name); setVacant(d.seatVacant); })
+      .catch(() => {});
   }, []);
+
+
 
   const rename = async () => {
     if (!org || name.trim().length < 2 || name.trim() === org.name) return;
@@ -260,13 +265,20 @@ function OrganizationCard({ me }: { me: User }) {
         <p className="text-[12.5px] text-[var(--text-tertiary)]">Loading…</p>
       ) : (
         <div className="flex flex-col gap-3">
-          <p className="text-[12.5px] text-[var(--text-secondary)]">
-            {ceo || lead
-              ? 'Everything here — people, tasks, meetings, messages — belongs to this organisation and is invisible to any other.'
-              : 'You are part of this organisation. Its codes are held by your CEO and your Team Leads.'}
-          </p>
+          {vacant && (ceo || lead) && (
+            <div className="rounded-md border p-3" style={{ background: 'var(--bg-subtle)' }}>
+              <div className="flex items-center gap-1.5 text-[13px] font-semibold">
+                <Crown size={13} /> No CEO yet
+              </div>
+              <p className="mt-0.5 text-[12.5px] text-[var(--text-secondary)]">
+                Until somebody holds the seat you can name this organisation yourself. When your CEO is ready, they
+                sign up with the organisation code below and pick <strong>CEO</strong> — that option only works while
+                the seat is empty.
+              </p>
+            </div>
+          )}
 
-          {ceo ? (
+          {(ceo || (vacant && lead)) ? (
             <div className="flex flex-wrap items-end gap-2">
               <label className="min-w-[220px] flex-1">
                 <span className="mb-1 block text-[11.5px] font-medium text-[var(--text-secondary)]">Name</span>

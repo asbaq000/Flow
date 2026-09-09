@@ -264,6 +264,13 @@ body {
   color: var(--text-tertiary);
 }
 
+/* The wordmark, and nothing else. */
+.font-display {
+  font-family: var(--font-display), 'Iowan Old Style', Georgia, serif;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+}
+
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -382,7 +389,8 @@ body {
   }
 }
 .animate-pop {
-  animation: pop-in 120ms ease-out;
+  /* Long enough to be felt, short enough that nobody waits on it. */
+  animation: pop-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes slide-in {
@@ -411,6 +419,106 @@ body {
   animation: fade-in 120ms ease-out;
 }
 
+/*
+ * Everything below is motion only: nothing here moves an element to a
+ * different place or changes what it looks like at rest. The page is meant to
+ * feel like it responds, not like it has been redesigned.
+ */
+
+/* One step of a wizard replacing another. */
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-step {
+  animation: step-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* A row arriving. Used on its own, or through .stagger for a list of them. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-rise {
+  animation: rise-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/*
+ * A list that deals itself out. The delays stop at the tenth child on
+ * purpose — past that the eye has already read the pattern, and a
+ * hundred-row table should not take two seconds to become readable.
+ */
+.stagger > * {
+  animation: rise-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.stagger > *:nth-child(1)  { animation-delay: 0ms; }
+.stagger > *:nth-child(2)  { animation-delay: 26ms; }
+.stagger > *:nth-child(3)  { animation-delay: 52ms; }
+.stagger > *:nth-child(4)  { animation-delay: 78ms; }
+.stagger > *:nth-child(5)  { animation-delay: 104ms; }
+.stagger > *:nth-child(6)  { animation-delay: 130ms; }
+.stagger > *:nth-child(7)  { animation-delay: 156ms; }
+.stagger > *:nth-child(8)  { animation-delay: 182ms; }
+.stagger > *:nth-child(9)  { animation-delay: 208ms; }
+.stagger > *:nth-child(n + 10) { animation-delay: 234ms; }
+
+/* A toast has to arrive from somewhere, or it just blinks into being. */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+.animate-toast {
+  animation: toast-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Pressing something should feel like pressing it. */
+.btn {
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease,
+    opacity 120ms ease, transform 110ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.965);
+}
+
+/* The lift a card already had, on a curve that has some spring in it. */
+.card {
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 200ms ease,
+    border-color 160ms ease, background 160ms ease;
+}
+
+/* A menu row lighting up under the cursor. */
+.menu-item {
+  transition: background 110ms ease, color 110ms ease;
+}
+
+/* Just landed somewhere new — a single breath, not a flash. */
+@keyframes settled {
+  0% { transform: scale(1); }
+  38% { transform: scale(1.028); }
+  100% { transform: scale(1); }
+}
+.animate-settle {
+  animation: settled 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .drag-ghost {
   opacity: 0.4;
 }
@@ -418,8 +526,16 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .animate-pop,
   .animate-slide,
-  .animate-fade {
+  .animate-fade,
+  .animate-step,
+  .animate-rise,
+  .animate-toast,
+  .animate-settle,
+  .stagger > * {
     animation: none;
+  }
+  .btn:active:not(:disabled) {
+    transform: none;
   }
 }
 

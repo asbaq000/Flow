@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Outfit, IBM_Plex_Mono } from 'next/font/google';
+import { Outfit, IBM_Plex_Mono, Playfair_Display } from 'next/font/google';
 import './globals.css';
 
 /*
@@ -10,6 +10,18 @@ const sans = Outfit({
   subsets: ['latin'],
   weight: ['300', '400', '500', '600', '700'],
   variable: '--font-sans',
+  display: 'swap',
+});
+
+/*
+ * The wordmark alone. A serif among all this sans is the whole point: it is
+ * the one place the product signs its name, so it should not look like the
+ * interface around it.
+ */
+const display = Playfair_Display({
+  subsets: ['latin'],
+  weight: ['500', '600'],
+  variable: '--font-display',
   display: 'swap',
 });
 
@@ -52,7 +64,7 @@ const THEME_BOOTSTRAP = `
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${sans.variable} ${mono.variable} ${display.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>

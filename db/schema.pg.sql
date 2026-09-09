@@ -386,6 +386,31 @@ ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_status_check
   CHECK (status IN ('TODO','IN_PROGRESS','SUBMITTED','CHANGES_REQUESTED','DONE'));
 
+-- The same starter shelf for organisations that already exist, added tag by
+-- tag so anything a team has made for itself is left alone.
+INSERT INTO tags (id, org_id, name, color)
+SELECT 'g_' || substr(md5(random()::text || o.id || t.name), 1, 22), o.id, t.name, t.color
+FROM organizations o
+CROSS JOIN (VALUES ('frontend','blue'),
+         ('backend','purple'),
+         ('api','green'),
+         ('database','brown'),
+         ('ui-ux','pink'),
+         ('mobile','orange'),
+         ('ai-model','purple'),
+         ('prompt','pink'),
+         ('dataset','yellow'),
+         ('rag','green'),
+         ('fine-tuning','orange'),
+         ('inference','blue'),
+         ('bug','red'),
+         ('feature','green'),
+         ('testing','yellow'),
+         ('deploy','orange'),
+         ('docs','gray'),
+         ('security','red')) AS t(name, color)
+WHERE NOT EXISTS (SELECT 1 FROM tags x WHERE x.org_id = o.id AND x.name = t.name);
+
 CREATE TABLE IF NOT EXISTS counters (
   name  TEXT PRIMARY KEY,
   value BIGINT NOT NULL

@@ -2,9 +2,53 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, X } from 'lucide-react';
+import { Check, ChevronDown, UserPlus, X } from 'lucide-react';
 import { PRIORITIES, STATUSES } from '@/lib/types';
 import type { Priority, Status, Tag, User } from '@/lib/types';
+
+/* ------------------------------------------------------------------ */
+/* The mark                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One unbroken stroke that rises, falls and rises again — a current, drawn
+ * rather than spelled. It is not a letter: a monogram in a rounded square is
+ * what every second product uses, and the point of a mark is to be the one
+ * shape somebody recognises before they have read anything.
+ */
+export function FlowMark({ size = 32 }: { size?: number }) {
+  const id = `fm${size}`;
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden focusable="false" style={{ display: 'block' }}>
+      <defs>
+        <linearGradient id={`${id}a`} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="var(--accent)" />
+          <stop offset="100%" stopColor="#8e7bff" />
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="32" height="32" rx="10" fill={`url(#${id}a)`} />
+      <path
+        d="M7 20.5c2.2-9 5.4-9 7.2-4.5 1.8 4.5 5 4.5 7.2-4.5"
+        fill="none"
+        stroke="var(--on-accent)"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        opacity="0.95"
+      />
+      <circle cx="23.4" cy="21.6" r="1.9" fill="var(--on-accent)" opacity="0.85" />
+    </svg>
+  );
+}
+
+/** The mark and the name, set the one place the product signs itself. */
+export function FlowWordmark({ mark = 32, text = 19 }: { mark?: number; text?: number }) {
+  return (
+    <span className="flex items-center gap-2.5">
+      <FlowMark size={mark} />
+      <span className="font-display leading-none" style={{ fontSize: text }}>Flow</span>
+    </span>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /* Avatar                                                              */
@@ -111,8 +155,14 @@ export function Avatar({
 }
 
 export function AvatarStack({ users, max = 3 }: { users: User[]; max?: number }) {
-  const shown = users.slice(0, max);
-  const extra = users.length - shown.length;
+  /*
+   * The same person often arrives twice — they raised the task and they are
+   * doing it — and a stack showing one face beside itself is both wrong and,
+   * because the key repeats, something React quietly drops.
+   */
+  const unique = users.filter((u, i) => users.findIndex((x) => x.id === u.id) === i);
+  const shown = unique.slice(0, max);
+  const extra = unique.length - shown.length;
   return (
     <div className="flex items-center">
       {shown.map((u, i) => (
@@ -353,18 +403,32 @@ export function PriorityPicker({
   disabled?: boolean;
   children?: React.ReactNode;
 }) {
+  // The chevron and the border are the whole message: this is a thing you
+  // can change, not a label somebody printed on the task.
   const fallback = (
     <span className="inline-flex items-center gap-1.5 text-[13px]">
       <PriorityBars priority={value} />
       {priorityMeta(value).label}
+      <ChevronDown size={12} className="text-[var(--text-tertiary)]" />
     </span>
   );
-  if (disabled) return <>{children ?? fallback}</>;
+  if (disabled) {
+    return <>{children ?? (
+      <span className="inline-flex items-center gap-1.5 text-[13px]">
+        <PriorityBars priority={value} />
+        {priorityMeta(value).label}
+      </span>
+    )}</>;
+  }
   return (
     <Popover
       width={170}
       trigger={({ toggle }) => (
-        <button onClick={toggle} className="rounded-[4px] px-1 py-0.5 hover:bg-[var(--bg-hover)]">
+        <button
+          onClick={toggle}
+          className="inline-flex items-center rounded-md border px-2 py-1 transition-colors hover:border-[var(--accent)] hover:bg-[var(--bg-hover)]"
+          style={{ borderColor: 'var(--border-strong)' }}
+        >
           {children ?? fallback}
         </button>
       )}
@@ -391,6 +455,47 @@ export function PriorityPicker({
         </>
       )}
     </Popover>
+  );
+}
+
+/**
+ * Priority laid out rather than hidden behind a menu: five chips, the chosen
+ * one wearing its own colour. Where there is room, showing the whole scale
+ * beats making somebody open a list to find out what the options even are.
+ */
+const PRIORITY_WASH: Record<Priority, string> = {
+  URGENT: 'var(--p-urgent-bg)',
+  HIGH: 'var(--p-high-bg)',
+  MEDIUM: 'var(--p-medium-bg)',
+  LOW: 'var(--p-low-bg)',
+  NONE: 'var(--p-none-bg)',
+};
+
+export function PriorityChoice({ value, onChange }: { value: Priority; onChange: (p: Priority) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {PRIORITIES.map((p) => {
+        const on = p.id === value;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => onChange(p.id)}
+            aria-pressed={on}
+            className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12.5px] font-medium transition-all"
+            style={{
+              borderColor: on ? p.color : 'var(--border-strong)',
+              background: on ? PRIORITY_WASH[p.id] : 'transparent',
+              color: on ? p.color : 'var(--text-secondary)',
+              borderWidth: on ? 1.5 : 1,
+            }}
+          >
+            <PriorityBars priority={p.id} />
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -425,14 +530,34 @@ export function UserPicker({
   const [query, setQuery] = useState('');
   const selected = [...users, ...pinned].find((u) => u.id === value) ?? null;
 
-  const fallback = (
+  /*
+   * Unassigned used to read as a greyed-out word, and people did not see that
+   * it was the way to hand work out at all. Empty, it is now an invitation
+   * with the accent behind it; filled, it is the person plus a chevron.
+   */
+  const fallback = selected ? (
     <span className="inline-flex items-center gap-1.5 text-[13px]">
       <Avatar user={selected} size="xs" />
-      <span className={selected ? '' : 'text-[var(--text-tertiary)]'}>{selected?.name ?? 'Unassigned'}</span>
+      {selected.name}
+      <ChevronDown size={12} className="text-[var(--text-tertiary)]" />
+    </span>
+  ) : (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] font-semibold"
+      style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
+    >
+      <UserPlus size={13} /> {label}
     </span>
   );
 
-  if (disabled) return <>{children ?? fallback}</>;
+  if (disabled) {
+    return <>{children ?? (
+      <span className="inline-flex items-center gap-1.5 text-[13px]">
+        <Avatar user={selected} size="xs" />
+        <span className={selected ? '' : 'text-[var(--text-tertiary)]'}>{selected?.name ?? 'Unassigned'}</span>
+      </span>
+    )}</>;
+  }
 
   const filtered = users.filter((u) => u.name.toLowerCase().includes(query.toLowerCase()));
 
@@ -440,7 +565,15 @@ export function UserPicker({
     <Popover
       width={250}
       trigger={({ toggle }) => (
-        <button onClick={toggle} className="rounded-[4px] px-1 py-0.5 text-left hover:bg-[var(--bg-hover)]">
+        <button
+          onClick={toggle}
+          className={`text-left transition-colors ${
+            selected
+              ? 'inline-flex items-center rounded-md border px-2 py-1 hover:border-[var(--accent)] hover:bg-[var(--bg-hover)]'
+              : 'rounded-md hover:brightness-95'
+          }`}
+          style={selected ? { borderColor: 'var(--border-strong)' } : undefined}
+        >
           {children ?? fallback}
         </button>
       )}

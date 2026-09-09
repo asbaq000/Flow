@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { isLead } from './permissions';
 import { many, one, run, tx, nextTaskSeq } from './pg';
 import { newId } from './ids';
-import { DEFAULT_PRIORITY } from './types';
+import { DEFAULT_PRIORITY, STARTER_TAGS } from './types';
 import type {
   ActivityItem, Attachment, Comment, Conversation, ConversationFull, Meeting, MeetingAttendee, MessageFile,
   MessageFileKind, Organization,
@@ -1598,6 +1598,13 @@ export async function createOrganization(name: string): Promise<Organization> {
     'INSERT INTO organizations (id, name, invite_code, lead_invite_code, created_at) VALUES (?,?,?,?,?)',
     [org.id, org.name, org.invite_code, org.lead_invite_code, org.created_at]
   );
+
+  // A first shelf of tags, so the picker is not an empty box on day one.
+  for (const tag of STARTER_TAGS) {
+    await run('INSERT INTO tags (id, org_id, name, color) VALUES (?,?,?,?)',
+      [newId('g_'), id, tag.name, tag.color]);
+  }
+
   return org;
 }
 

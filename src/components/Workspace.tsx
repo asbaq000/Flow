@@ -896,7 +896,7 @@ export default function Workspace({
 
       {toast && (
         <div
-          className="animate-pop fixed bottom-5 left-1/2 z-[70] -translate-x-1/2 rounded-md px-3.5 py-2 text-[13px] font-medium text-white"
+          className="animate-toast fixed bottom-5 left-1/2 z-[70] -translate-x-1/2 rounded-md px-3.5 py-2 text-[13px] font-medium text-white"
           style={{ background: '#2f2f2f', boxShadow: 'var(--shadow-lg)' }}
           role="status"
         >

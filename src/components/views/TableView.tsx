@@ -72,7 +72,7 @@ export default function TableView({ tasks, users, me, onOpen, onUpdate }: Props)
             <Th className="w-[86px]">Activity</Th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="stagger">
           {sorted.map((task) => {
             const isOpen = expanded.has(task.id);
             return (

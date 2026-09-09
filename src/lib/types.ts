@@ -46,6 +46,36 @@ export const DEFAULT_PRIORITY: Priority = 'HIGH';
 export const TAG_COLORS = ['gray', 'brown', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'red'] as const;
 export type TagColor = (typeof TAG_COLORS)[number];
 
+/*
+ * What a new organisation starts with, because an empty tag picker teaches
+ * nobody anything. The set is the work this is actually used for — shipping
+ * web software and building on models — in three groups: the surface, the
+ * model, and the things every team does regardless.
+ *
+ * Nothing here is fixed. Tags are created by typing one, and these are only
+ * a first shelf rather than a taxonomy anybody has to obey.
+ */
+export const STARTER_TAGS: { name: string; color: TagColor }[] = [
+  { name: 'frontend', color: 'blue' },
+  { name: 'backend', color: 'purple' },
+  { name: 'api', color: 'green' },
+  { name: 'database', color: 'brown' },
+  { name: 'ui-ux', color: 'pink' },
+  { name: 'mobile', color: 'orange' },
+  { name: 'ai-model', color: 'purple' },
+  { name: 'prompt', color: 'pink' },
+  { name: 'dataset', color: 'yellow' },
+  { name: 'rag', color: 'green' },
+  { name: 'fine-tuning', color: 'orange' },
+  { name: 'inference', color: 'blue' },
+  { name: 'bug', color: 'red' },
+  { name: 'feature', color: 'green' },
+  { name: 'testing', color: 'yellow' },
+  { name: 'deploy', color: 'orange' },
+  { name: 'docs', color: 'gray' },
+  { name: 'security', color: 'red' },
+];
+
 export interface Organization {
   id: string;
   name: string;
