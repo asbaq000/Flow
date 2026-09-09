@@ -14,6 +14,7 @@ import { isLead } from '@/lib/permissions';
 import { Avatar, AvatarStack, Popover } from '../ui';
 import { VoiceRecorder, formatDuration } from '../VoiceNotes';
 import { fileSize } from '../Attachments';
+import { askConfirm } from '../Confirm';
 import { formatDateTime, timeAgo } from './shared';
 
 /** An in-progress "@na" or "#12" just before the caret. */
@@ -342,7 +343,13 @@ export default function MessagesView({
   };
 
   const removeMessage = async (m: Message) => {
-    if (!window.confirm('Delete this message? It will show as deleted for everyone in the room.')) return;
+    const sure = await askConfirm({
+      title: 'Delete this message?',
+      body: 'It stays in the thread as "deleted" so the conversation still reads in order. Any file on it goes.',
+      confirmLabel: 'Delete message',
+      tone: 'danger',
+    });
+    if (!sure) return;
     try {
       await api.messages.remove(m.id);
       setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, body: '', deleted_at: Date.now(), files: [] } : x)));
@@ -354,7 +361,12 @@ export default function MessagesView({
 
   const clearChat = async () => {
     if (!room) return;
-    if (!window.confirm('Clear this chat for you? Everyone else keeps what was said.')) return;
+    const sure = await askConfirm({
+      title: 'Clear this chat?',
+      body: 'It empties for you alone. Everyone else keeps every message, and new ones still arrive.',
+      confirmLabel: 'Clear it',
+    });
+    if (!sure) return;
     try {
       await api.conversations.clear(room.id);
       setMessages([]);
@@ -366,7 +378,13 @@ export default function MessagesView({
 
   const deleteChat = async () => {
     if (!room) return;
-    if (!window.confirm('Delete this chat for you? It leaves your list and its history is cleared for you. It comes back if somebody writes here again.')) return;
+    const sure = await askConfirm({
+      title: 'Delete this chat?',
+      body: 'It leaves your list and its history is cleared for you alone. It comes back if somebody writes here again.',
+      confirmLabel: 'Delete for me',
+      tone: 'danger',
+    });
+    if (!sure) return;
     try {
       await api.conversations.remove(room.id);
       setCurrent(null);

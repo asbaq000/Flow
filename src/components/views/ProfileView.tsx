@@ -9,6 +9,7 @@ import type { NotificationTestResult, Organization, TaskSheet, User } from '@/li
 import { api } from '@/lib/client';
 import { usePush } from '@/lib/usePush';
 import { PREF_RECORD_CALLS, usePref } from '@/lib/prefs';
+import { askConfirm } from '../Confirm';
 import { Avatar, avatarChanged, roleShort } from '../ui';
 import { formatDateTime } from './shared';
 
@@ -250,7 +251,13 @@ function OrganizationCard({ me }: { me: User }) {
   };
 
   const rotate = async (which: 'admin' | 'lead') => {
-    if (!confirm('Mint a new code? The current one stops working immediately, for everyone still holding it.')) return;
+    const sure = await askConfirm({
+      title: 'Mint a new code?',
+      body: 'The current one stops working immediately, for everyone still holding it. Anybody mid-signup will have to ask you for the new one.',
+      confirmLabel: 'Replace the code',
+      tone: 'danger',
+    });
+    if (!sure) return;
     setBusy(which); setError('');
     try {
       const body = which === 'admin' ? { rotateInvite: true } : { rotateLeadInvite: true };

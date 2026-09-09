@@ -11,6 +11,7 @@ import { api } from '@/lib/client';
 import { canCancelMeeting } from '@/lib/permissions';
 import { Avatar } from '../ui';
 import MeetingRecorder from '../MeetingRecorder';
+import { askConfirm } from '../Confirm';
 import { formatDateTime, timeAgo } from './shared';
 
 export default function MeetingsView({
@@ -114,7 +115,16 @@ function MeetingCard({
 
   const act = async (kind: 'retry' | 'cancel') => {
     if (busy) return;
-    if (kind === 'cancel' && !confirm(`Cancel "${meeting.title}"? Everyone invited is told.`)) return;
+    if (kind === 'cancel') {
+      const sure = await askConfirm({
+        title: `Cancel "${meeting.title}"?`,
+        body: 'Everyone invited is told, and the Google Calendar event is cancelled. The minutes and attendance are kept.',
+        confirmLabel: 'Cancel the meeting',
+        cancelLabel: 'Keep it',
+        tone: 'danger',
+      });
+      if (!sure) return;
+    }
     setBusy(kind);
     setError('');
     try {

@@ -13,6 +13,7 @@ import type { TaskAbilities } from '@/lib/permissions';
 import { api, serializeDoc } from '@/lib/client';
 import { useLiveEvents } from '@/lib/useLiveEvents';
 import { Avatar, Empty, Popover, PriorityPicker, StatusBadge, StatusPicker, TagChip, UserPicker, roleShort } from './ui';
+import { askConfirm } from './Confirm';
 import BlockEditor from './BlockEditor';
 import CommentThread from './CommentThread';
 import ProgressPanel from './ProgressPanel';
@@ -333,8 +334,13 @@ export default function TaskPanel({
                     {abilities?.delete && (
                       <button
                         className="menu-item btn-danger"
-                        onClick={() => {
-                          if (confirm(`Delete "${task.title}" permanently? This cannot be undone.`)) {
+                        onClick={async () => {
+                          if (await askConfirm({
+                            title: `Delete "${task.title}"?`,
+                            body: 'The task goes, and its comments, recordings, files and history go with it. This cannot be undone.',
+                            confirmLabel: 'Delete task',
+                            tone: 'danger',
+                          })) {
                             onDelete(task.id);
                           }
                           close();
@@ -570,8 +576,13 @@ export default function TaskPanel({
 
                         {abilities?.delete && (
                           <button
-                            onClick={() => {
-                              if (confirm(`Delete "${task.title}" permanently? This cannot be undone.`)) {
+                            onClick={async () => {
+                              if (await askConfirm({
+                            title: `Delete "${task.title}"?`,
+                            body: 'The task goes, and its comments, recordings, files and history go with it. This cannot be undone.',
+                            confirmLabel: 'Delete task',
+                            tone: 'danger',
+                          })) {
                                 onDelete(task.id);
                               }
                             }}

@@ -7,6 +7,7 @@ import { MAX_ATTACHMENT_BYTES } from '@/lib/types';
 import { api } from '@/lib/client';
 import { canRemoveAttachment } from '@/lib/permissions';
 import { timeAgo } from './views/shared';
+import { askConfirm } from './Confirm';
 
 /** Bytes as something a person reads, not a number they decode. */
 export function fileSize(bytes: number): string {
@@ -55,7 +56,14 @@ export default function Attachments({
   };
 
   const remove = async (file: Attachment) => {
-    if (busy || !confirm(`Remove "${file.filename}"?`)) return;
+    if (busy) return;
+    const sure = await askConfirm({
+      title: `Remove "${file.filename}"?`,
+      body: 'The file is deleted from this task for everyone.',
+      confirmLabel: 'Remove file',
+      tone: 'danger',
+    });
+    if (!sure) return;
     setBusy(true);
     setError('');
     try {

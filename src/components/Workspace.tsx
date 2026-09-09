@@ -31,6 +31,7 @@ import { canAssign } from '@/lib/permissions';
 import ScheduleMeetingModal from './ScheduleMeetingModal';
 import NotificationsPanel from './NotificationsPanel';
 import TaskSheetPanel from './TaskSheetPanel';
+import { ConfirmHost } from './Confirm';
 import ReportView from './views/ReportView';
 
 export type ViewKind = 'board' | 'table' | 'list' | 'calendar';
@@ -926,6 +927,9 @@ export default function Workspace({
           }}
         />
       )}
+
+      {/* Every "are you sure" in the app renders here, in the app's own voice. */}
+      <ConfirmHost />
 
       {toast && (
         <div

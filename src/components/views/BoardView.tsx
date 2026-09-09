@@ -13,6 +13,7 @@ import type { Priority, Status, TaskFull, User } from '@/lib/types';
 import { PRIORITIES, STATUSES, docToPlain } from '@/lib/types';
 import { canAssign, canChangeStatus, canSplit } from '@/lib/permissions';
 import { AvatarStack, Popover } from '../ui';
+import { askConfirm } from '../Confirm';
 import type { GroupBy } from '../Workspace';
 import { dueMeta } from './shared';
 
@@ -178,9 +179,20 @@ export default function BoardView({ tasks, users, me, groupBy, sceneKey, onOpen,
       if (task.status === targetColumn.id) return;
       if (!canChangeStatus(me, task)) return;
       // Done is a decision, so undoing it by a slip of the mouse should not be.
+      // dnd-kit's callback cannot wait, so the question is asked after the drop
+      // and the move only happens if the answer comes back yes.
       if (task.status === 'DONE') {
         const label = STATUSES.find((st) => st.id === targetColumn.id)?.label ?? 'open work';
-        if (!window.confirm(`TSK-${task.seq} is done. Reopen it as "${label}"?`)) return;
+        void askConfirm({
+          title: `Reopen TSK-${task.seq}?`,
+          body: `It is marked done. Moving it to "${label}" puts it back into open work, and it will need approving again.`,
+          confirmLabel: 'Reopen it',
+        }).then((yes) => {
+          if (!yes) return;
+          onUpdate(task.id, { status: targetColumn.id as Status });
+          settle(task.id);
+        });
+        return;
       }
       onUpdate(task.id, { status: targetColumn.id as Status });
       settle(task.id);
