@@ -20,6 +20,13 @@ import { formatDateTime, timeAgo } from './shared';
 type Hint = { kind: '@' | '#'; query: string; start: number };
 
 /**
+ * How many suggestions the pop-up will hold. Six was too few to be a list of
+ * "the tasks" at all; this is enough to scroll through and still bounded, so
+ * a board of four hundred does not become the dropdown.
+ */
+const MAX_HINTS = 40;
+
+/**
  * Messages: one list of rooms on the left, the open one on the right.
  *
  * Task groups appear on their own the moment a task has more than two people
@@ -51,6 +58,8 @@ export default function MessagesView({
   const [cursor, setCursor] = useState(0);
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // The highlighted row, so arrowing past the fold scrolls it into view.
+  const activeHintRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -153,7 +162,15 @@ export default function MessagesView({
 
   /* ---------- the composer's two pop-ups ---------- */
 
-  const allTasks = useMemo(() => tasks.flatMap((t) => [t, ...t.subtasks]), [tasks]);
+  /*
+   * Newest first, because the task somebody is about to mention is nearly
+   * always one they have just been working on — board order is position on a
+   * column, which is not the same thing at all.
+   */
+  const allTasks = useMemo(
+    () => tasks.flatMap((t) => [t, ...t.subtasks]).sort((a, b) => b.created_at - a.created_at),
+    [tasks]
+  );
   // In a room, @ offers the people in it; a direct chat has exactly one other person.
   const mentionPool = useMemo(
     () => (room && room.members.length > 1 ? room.members : users).filter((u) => u.id !== me.id),
@@ -162,19 +179,39 @@ export default function MessagesView({
   const userHits = useMemo(() => {
     if (hint?.kind !== '@') return [];
     const q = hint.query.trim().toLowerCase();
-    return mentionPool.filter((u) => u.name.toLowerCase().includes(q)).slice(0, 6);
+    return mentionPool.filter((u) => u.name.toLowerCase().includes(q)).slice(0, MAX_HINTS);
   }, [hint, mentionPool]);
+
   const taskHits = useMemo(() => {
     if (hint?.kind !== '#') return [];
     const q = hint.query.trim().toLowerCase();
+    // "12", "tsk-12" and "tsk12" are all somebody reaching for a ticket number.
     const n = q.replace(/^tsk-?/, '');
-    return allTasks
-      .filter((t) => !n || String(t.seq).startsWith(n) || t.title.toLowerCase().includes(q))
-      .slice(0, 6);
+
+    // Bare "#": the whole board, newest first, rather than an arbitrary six.
+    if (!q) return allTasks.slice(0, MAX_HINTS);
+
+    const matches = allTasks.filter(
+      (t) => (n && String(t.seq).startsWith(n)) || t.title.toLowerCase().includes(q)
+    );
+    // A typed number is almost always the ticket, so those go above a title
+    // that happens to contain the same digits.
+    return matches
+      .sort((a, b) => {
+        const an = n && String(a.seq).startsWith(n) ? 0 : 1;
+        const bn = n && String(b.seq).startsWith(n) ? 0 : 1;
+        return an - bn || b.created_at - a.created_at;
+      })
+      .slice(0, MAX_HINTS);
   }, [hint, allTasks]);
   const hits = hint?.kind === '@' ? userHits.length : taskHits.length;
 
   useEffect(() => setCursor(0), [hint?.query, hint?.kind]);
+
+  // A list this long scrolls, so the keyboard has to drag the view with it.
+  useEffect(() => {
+    activeHintRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [cursor, hint?.query]);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -495,14 +532,18 @@ export default function MessagesView({
             ) : (
               <div className="relative border-t p-3">
                 {hint && hits > 0 && (
-                  <div className="menu absolute bottom-full left-3 mb-1 w-[280px]">
-                    <div className="px-2 pb-1 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+                  <div className="menu scroll-thin absolute bottom-full left-3 mb-1 max-h-[280px] w-[320px] overflow-y-auto">
+                    <div className="sticky top-0 px-2 pb-1 pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--text-tertiary)]" style={{ background: 'var(--bg-panel)' }}>
                       {hint.kind === '@' ? 'Mention' : 'Link a task'}
+                      <span className="ml-1 font-normal normal-case tracking-normal opacity-70">
+                        {hits}{hits === MAX_HINTS ? '+' : ''}
+                      </span>
                     </div>
                     {hint.kind === '@'
                       ? userHits.map((u, i) => (
                           <button
                             key={u.id}
+                            ref={i === cursor ? activeHintRef : undefined}
                             data-active={i === cursor}
                             className="menu-item"
                             onMouseEnter={() => setCursor(i)}
@@ -515,12 +556,13 @@ export default function MessagesView({
                       : taskHits.map((t, i) => (
                           <button
                             key={t.id}
+                            ref={i === cursor ? activeHintRef : undefined}
                             data-active={i === cursor}
                             className="menu-item"
                             onMouseEnter={() => setCursor(i)}
                             onMouseDown={(e) => { e.preventDefault(); pick(i); }}
                           >
-                            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">TSK-{t.seq}</span>
+                            <span className="shrink-0 font-mono text-[11px] text-[var(--text-tertiary)]">TSK-{t.seq}</span>
                             <span className="min-w-0 flex-1 truncate">{t.title}</span>
                           </button>
                         ))}
