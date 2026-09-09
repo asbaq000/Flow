@@ -155,16 +155,17 @@ export default function SplitModal({
         )}
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         {pieces.map((piece, i) => (
-          <div key={piece.key} className="flex flex-col gap-1.5">
+          /* Each one boxed, so a row's title, brief and files read as one thing. */
+          <div key={piece.key} className="rounded-md border p-2.5" style={{ background: 'var(--bg-subtle)' }}>
             <div className="flex items-center gap-2">
             <span className="grid h-6 w-6 shrink-0 place-items-center rounded text-[11px] font-semibold text-[var(--text-tertiary)]">
               {i + 1}
             </span>
             <input
-              className="input flex-1 py-1.5 text-[13.5px]"
-              placeholder={`Piece ${i + 1} — e.g. "${SUGGESTIONS[i % SUGGESTIONS.length]}"`}
+              className="input min-w-0 flex-1 py-1.5 text-[13.5px]"
+              placeholder={`${stages ? 'Stage' : 'Piece'} ${i + 1} — e.g. "${SUGGESTIONS[i % SUGGESTIONS.length]}"`}
               value={piece.title}
               onChange={(e) => update(piece.key, { title: e.target.value })}
               onKeyDown={(e) => {
@@ -188,26 +189,32 @@ export default function SplitModal({
             <button
               onClick={() => setPieces((prev) => (prev.length > 2 ? prev.filter((p) => p.key !== piece.key) : prev))}
               disabled={pieces.length <= 2}
-              className="btn btn-ghost px-1.5 disabled:opacity-30"
-              aria-label="Remove piece"
+              className="btn btn-ghost shrink-0 px-1.5 disabled:opacity-30"
+              aria-label={stages ? 'Remove stage' : 'Remove piece'}
             >
               <Trash2 size={14} />
             </button>
             </div>
 
-            {/* The brief for this piece alone. */}
-            <textarea
-              className="input ml-8 w-auto resize-y py-1.5 text-[12.5px]"
-              rows={2}
-              placeholder={`What ${canAssign ? 'they are' : 'you are'} being asked for here (optional)`}
-              value={piece.description}
-              onChange={(e) => update(piece.key, { description: e.target.value })}
-            />
+            {/*
+              * The brief for this piece alone. Indented by a padded wrapper
+              * rather than a margin on the field: .input is width:100%, so a
+              * margin on it adds to a full width and spills out of the panel.
+              */}
+            <div className="mt-1.5 pl-8">
+              <textarea
+                className="input w-full resize-y py-1.5 text-[12.5px]"
+                rows={2}
+                placeholder={`What ${canAssign ? 'they are' : 'you are'} being asked for here (optional)`}
+                value={piece.description}
+                onChange={(e) => update(piece.key, { description: e.target.value })}
+              />
+            </div>
 
             {/* Files for this piece only — they land on the subtask, so the
                 developer assigned it sees their own documents and no one
                 else's. */}
-            <div className="flex flex-wrap items-center gap-1.5 pl-8">
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-8">
               {piece.files.map((f) => (
                 <span
                   key={f.name + f.size}
@@ -276,7 +283,7 @@ export default function SplitModal({
         onClick={() => setPieces((prev) => [...prev, makePiece()])}
         className="btn btn-ghost mt-2 text-[12.5px] text-[var(--text-secondary)]"
       >
-        <Plus size={13} /> Add another piece
+        <Plus size={13} /> Add another {stages ? 'stage' : 'piece'}
       </button>
 
       {!pool.length && (
