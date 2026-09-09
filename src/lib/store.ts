@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { isLead } from './permissions';
 import { many, one, run, tx, nextTaskSeq } from './pg';
 import { newId } from './ids';
+import { DEFAULT_PRIORITY } from './types';
 import type {
   ActivityItem, Attachment, Comment, Conversation, ConversationFull, Meeting, MeetingAttendee, MessageFile,
   MessageFileKind, Organization,
@@ -265,7 +266,7 @@ export async function createTask(
       actor.org_id, id, seq, title,
       input.description ?? '[]',
       input.status ?? 'TODO',
-      input.priority ?? 'MEDIUM',
+      input.priority ?? DEFAULT_PRIORITY,
       actor.id,
       assignee ?? null,
       input.parentId ?? null,
@@ -392,8 +393,75 @@ export async function updateTask(
 
   publish({ type: 'task.updated', taskId: id, actorId: actor.id });
   await syncTaskConversation(id);
-  if (patch.status === 'DONE') await closeTaskConversation(id, actor);
+  if (patch.status === 'DONE' && before.status !== 'DONE') {
+    await closeTaskConversation(id, actor);
+    await finishTogether(actor, id);
+  }
   return getTask(id);
+}
+
+/**
+ * A split task and its pieces finish together.
+ *
+ * Splitting is one job written down in several places, so closing it in
+ * several places is bookkeeping nobody should have to do. Approve the last
+ * piece and the umbrella closes itself; close the umbrella and the pieces go
+ * with it. Both directions, because both are the same fact arriving from a
+ * different end.
+ *
+ * Only one level deep in either direction, which is all there is: a piece
+ * cannot be split again.
+ */
+async function finishTogether(actor: User, id: string) {
+  const now = Date.now();
+
+  // Down: every piece of a finished task is finished.
+  const pieces = await many<{ id: string; title: string; status: Status; assignee_id: string | null }>(
+    `SELECT id, title, status, assignee_id FROM tasks WHERE parent_id = ? AND status != 'DONE'`,
+    [id]
+  );
+  for (const piece of pieces) {
+    await run(
+      `UPDATE tasks SET status = 'DONE', progress = 100, completed_at = ?, updated_at = ? WHERE id = ?`,
+      [now, now, piece.id]
+    );
+    await logActivity(piece.id, actor.id, 'status', { from: piece.status, to: 'DONE', with_parent: true });
+    if (piece.assignee_id) {
+      await notify(piece.assignee_id, actor.id, 'approved', piece.id, null,
+        `${actor.name} closed "${piece.title}" along with the task it was split from`);
+    }
+    publish({ type: 'task.updated', taskId: piece.id, actorId: actor.id });
+    await closeTaskConversation(piece.id, actor);
+  }
+
+  // Up: an umbrella whose every piece is done is itself done.
+  const self = await one<{ parent_id: string | null }>('SELECT parent_id FROM tasks WHERE id = ?', [id]);
+  if (!self?.parent_id) return;
+
+  const left = await one<{ c: number }>(
+    `SELECT COUNT(*)::int AS c FROM tasks WHERE parent_id = ? AND status != 'DONE'`,
+    [self.parent_id]
+  );
+  if ((left?.c ?? 0) > 0) return;
+
+  const parent = await one<Task>('SELECT * FROM tasks WHERE id = ?', [self.parent_id]);
+  if (!parent || parent.status === 'DONE') return;
+
+  await run(
+    `UPDATE tasks SET status = 'DONE', progress = 100, completed_at = ?, updated_at = ? WHERE id = ?`,
+    [now, now, parent.id]
+  );
+  await logActivity(parent.id, actor.id, 'status', { from: parent.status, to: 'DONE', all_pieces_done: true });
+  // The assignee and the creator are often the same person; tell them once.
+  const told = new Set<string>();
+  for (const who of [parent.assignee_id, parent.creator_id]) {
+    if (!who || told.has(who)) continue;
+    told.add(who);
+    await notify(who, actor.id, 'approved', parent.id, null,
+      `Every piece of "${parent.title}" is done, so the task is done`);
+  }
+  publish({ type: 'task.updated', taskId: parent.id, actorId: actor.id });
+  await closeTaskConversation(parent.id, actor);
 }
 
 export async function deleteTask(id: string) {
@@ -402,10 +470,18 @@ export async function deleteTask(id: string) {
 }
 
 /** Team Lead splits one task into several pieces, each handed to its own Dev. */
+export interface SplitPiece {
+  title: string;
+  /** A brief of its own, serialised like any description. Optional. */
+  description?: string;
+  assigneeId: string | null;
+  estimate?: number | null;
+}
+
 export async function splitTask(
   actor: User,
   parentId: string,
-  pieces: { title: string; assigneeId: string | null; estimate?: number | null }[]
+  pieces: SplitPiece[]
 ): Promise<TaskFull | null> {
   const parent = await one<Task>('SELECT * FROM tasks WHERE id = ?', [parentId]);
   if (!parent) return null;
@@ -429,9 +505,12 @@ export async function splitTask(
     await run(
       `INSERT INTO tasks (org_id, id, seq, title, description, status, priority, creator_id, assignee_id,
                           parent_id, due_date, estimate, progress, position, archived, created_at, updated_at)
-       VALUES (?,?,?,?,'[]',?,?,?,?,?,?,?,0,?,0,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,0,?,?)`,
       [
         parent.org_id, id, seq, title,
+        // Each piece carries its own brief, so the person holding it reads
+        // what they were asked for rather than the whole of the parent.
+        piece.description?.trim() ? piece.description : '[]',
         'TODO',
         parent.priority, actor.id, piece.assigneeId ?? null, parentId,
         parent.due_date, piece.estimate ?? null, basePos + (i + 1) * 1000, now, now,

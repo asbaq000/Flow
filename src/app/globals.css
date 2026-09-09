@@ -48,11 +48,18 @@
   --radius: 12px;
   --radius-card: 16px;
 
-  /* Card washes by urgency — pale enough that black text still reads on them. */
-  --p-urgent-bg: #ffe6ec;  --p-urgent-edge: #f7c9d5;
-  --p-high-bg: #ffeee4;    --p-high-edge: #f8d5c4;
-  --p-medium-bg: #fff6e0;  --p-medium-edge: #f5e3bd;
-  --p-low-bg: #e9f1ff;     --p-low-edge: #cfe0f9;
+  /*
+   * Card washes by urgency — soft enough that black text still reads on them,
+   * with the priority's own colour as the edge so the card says how urgent it
+   * is from across the room without anybody reading a word.
+   */
+  --p-urgent-bg: #fbdde2;  --p-urgent-edge: #9b1c31;
+  --p-high-bg: #fde5e5;    --p-high-edge: #e5484d;
+  --p-medium-bg: #e3ecfb;  --p-medium-edge: #3b6fd4;
+  --p-low-bg: #fcefdb;     --p-low-edge: #e8963c;
+  --p-none-bg: #f2f2f7;    --p-none-edge: #cdcbd8;
+  /* A chip that has to sit on one of those washes, in either theme. */
+  --chip-on-card: rgba(255, 255, 255, 0.72);
 
   /* One tint + one dot per board column. */
   --s-triage-bg: #fff3e2;      --s-triage-dot: #f0913a;
@@ -95,10 +102,17 @@
   --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.6), 0 3px 8px rgba(0, 0, 0, 0.4);
 
-  --p-urgent-bg: rgba(236, 74, 114, 0.13);  --p-urgent-edge: rgba(236, 74, 114, 0.3);
-  --p-high-bg: rgba(244, 105, 63, 0.12);    --p-high-edge: rgba(244, 105, 63, 0.28);
-  --p-medium-bg: rgba(240, 145, 58, 0.11);  --p-medium-edge: rgba(240, 145, 58, 0.26);
-  --p-low-bg: rgba(61, 139, 253, 0.12);     --p-low-edge: rgba(61, 139, 253, 0.28);
+  /*
+   * The same four steps, deepened rather than inverted: on a near-black ground
+   * a pastel becomes a headlight, so each wash is a translucent version of its
+   * own colour and the edge is lifted until it reads against it.
+   */
+  --p-urgent-bg: rgba(155, 28, 49, 0.26);   --p-urgent-edge: #c8415c;
+  --p-high-bg: rgba(229, 72, 77, 0.20);     --p-high-edge: #ef6a6e;
+  --p-medium-bg: rgba(59, 111, 212, 0.20);  --p-medium-edge: #6a97e8;
+  --p-low-bg: rgba(232, 150, 60, 0.18);     --p-low-edge: #eda85c;
+  --p-none-bg: rgba(255, 255, 255, 0.04);   --p-none-edge: rgba(255, 255, 255, 0.14);
+  --chip-on-card: rgba(255, 255, 255, 0.10);
 
   /*
    * The pastels become deep translucent washes: a #FFF3E2 card on a
@@ -275,33 +289,14 @@ body {
 .pri-HIGH   { background: var(--p-high-bg);   border-color: var(--p-high-edge); }
 .pri-MEDIUM { background: var(--p-medium-bg); border-color: var(--p-medium-edge); }
 .pri-LOW    { background: var(--p-low-bg);    border-color: var(--p-low-edge); }
-.pri-NONE   { background: var(--bg-card); }
+.pri-NONE   { background: var(--p-none-bg);   border-color: var(--p-none-edge); }
+/* The edge is the whole signal, so give it enough weight to be one. */
+.pri-URGENT, .pri-HIGH, .pri-MEDIUM, .pri-LOW, .pri-NONE { border-width: 1.5px; }
 
-/*
- * A board of one colour is a board you have to read word by word. So every
- * task keeps a wash of its own, picked from its id and therefore the same on
- * every screen and after every reload — it is a handle for the eye, not
- * decoration, which is why it must never be random per render.
- *
- * The hue is the task's; the border is its priority, so the thing you scan
- * for across a full board still reads at a glance. Saturation stays low and
- * lightness high, because these sit behind text: pale in daylight, deep and
- * desaturated at night, and legible in both.
- */
-.task-tint {
-  background: hsl(var(--tint-h) 74% 93%);
-  border-width: 1.5px;
-}
-[data-theme='dark'] .task-tint {
-  background: hsl(var(--tint-h) 30% 17%);
-}
-/* Chips sitting on the wash need a surface of their own that survives both. */
-.task-tint .on-tint {
-  background: rgba(255, 255, 255, 0.7);
+/* Chips sitting on one of those washes need a surface that survives both themes. */
+.on-tint {
+  background: var(--chip-on-card);
   color: var(--text-secondary);
-}
-[data-theme='dark'] .task-tint .on-tint {
-  background: rgba(255, 255, 255, 0.09);
 }
 
 /*

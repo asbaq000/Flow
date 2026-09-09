@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { currentUser, pickRoutingLead } from '@/lib/auth';
+import { DEFAULT_PRIORITY } from '@/lib/types';
 import { fail, ok, readJson } from '@/lib/api';
 import { allTags, allUsers, createTask, getUser, listTasks } from '@/lib/store';
 import { canChooseAssigneeAtCreation, canView, isAssignableRole } from '@/lib/permissions';
@@ -68,7 +69,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       title: body.title,
       description: body.description,
       status: 'TODO',
-      priority: body.priority ?? 'MEDIUM',
+      priority: body.priority ?? DEFAULT_PRIORITY,
       assigneeId: landedOn?.id ?? null,
       parentId: body.parentId ?? null,
       dueDate: body.dueDate ?? null,

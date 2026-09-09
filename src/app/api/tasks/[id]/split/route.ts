@@ -6,7 +6,7 @@ import { canAssignPieces, canSplit, canView, isAssignableRole } from '@/lib/perm
 type Ctx = { params: Promise<{ id: string }> };
 
 interface Body {
-  pieces?: { title: string; assigneeId: string | null; estimate?: number | null }[];
+  pieces?: { title: string; description?: string; assigneeId: string | null; estimate?: number | null }[];
 }
 
 export async function POST(req: Request, { params }: Ctx) {

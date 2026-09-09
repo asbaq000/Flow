@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   description  TEXT NOT NULL DEFAULT '[]',
   status       TEXT NOT NULL DEFAULT 'TODO'
                  CHECK (status IN ('TODO','IN_PROGRESS','SUBMITTED','CHANGES_REQUESTED','DONE')),
-  priority     TEXT NOT NULL DEFAULT 'MEDIUM'
+  priority     TEXT NOT NULL DEFAULT 'HIGH'
                  CHECK (priority IN ('URGENT','HIGH','MEDIUM','LOW','NONE')),
   -- Nullable so a departed teammate can be removed without deleting the
   -- tasks they raised. The UI shows "Removed user" instead.
@@ -378,6 +378,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_org_name ON tags(org_id, name);
 -- and a blocked task is one whose blocker belongs in a progress report, not
 -- in a column of its own. Anything still in either lands in To Do.
 UPDATE tasks SET status = 'TODO' WHERE status IN ('TRIAGE', 'BLOCKED');
+-- Most work raised here is high priority, so that is what a task is unless
+-- somebody says otherwise. Existing rows keep whatever they were given.
+ALTER TABLE tasks ALTER COLUMN priority SET DEFAULT 'HIGH';
 ALTER TABLE tasks ALTER COLUMN status SET DEFAULT 'TODO';
 ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_status_check

@@ -26,13 +26,22 @@ export const STATUSES: { id: Status; label: string; color: string; dot: string; 
 /** Statuses a Developer may set on their own task. Approval is not theirs to give. */
 export const DEV_SETTABLE: Status[] = ['TODO', 'IN_PROGRESS', 'SUBMITTED'];
 
+/*
+ * Urgency is a temperature, so the scale reads as one: deep red at the top,
+ * cooling through red to a calm blue in the middle, and a warm amber at the
+ * bottom for work that is real but not pressing. Nothing here is a hue
+ * somebody has to learn — red is loud everywhere.
+ */
 export const PRIORITIES: { id: Priority; label: string; color: string; weight: number }[] = [
-  { id: 'URGENT', label: 'Urgent', color: '#ec4a72', weight: 0 },
-  { id: 'HIGH',   label: 'High',   color: '#f4693f', weight: 1 },
-  { id: 'MEDIUM', label: 'Medium', color: '#f0913a', weight: 2 },
-  { id: 'LOW',    label: 'Low',    color: '#3d8bfd', weight: 3 },
+  { id: 'URGENT', label: 'Urgent', color: '#9b1c31', weight: 0 },
+  { id: 'HIGH',   label: 'High',   color: '#e5484d', weight: 1 },
+  { id: 'MEDIUM', label: 'Medium', color: '#3b6fd4', weight: 2 },
+  { id: 'LOW',    label: 'Low',    color: '#e8963c', weight: 3 },
   { id: 'NONE',   label: 'None',   color: '#9797ac', weight: 4 },
 ];
+
+/** What a task is unless somebody says otherwise. Most work raised here is. */
+export const DEFAULT_PRIORITY: Priority = 'HIGH';
 
 export const TAG_COLORS = ['gray', 'brown', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'red'] as const;
 export type TagColor = (typeof TAG_COLORS)[number];
@@ -340,6 +349,18 @@ export interface Block {
 
 export function emptyDoc(): Block[] {
   return [{ id: 'b' + Math.random().toString(36).slice(2, 10), type: 'paragraph', text: '' }];
+}
+
+/** Wraps a plain-typed brief into the block document the editor understands. */
+export function docFromText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '[]';
+  const blocks: Block[] = trimmed.split(/\n{2,}/).map((para, i) => ({
+    id: `b${i}_${Math.random().toString(36).slice(2, 8)}`,
+    type: 'paragraph',
+    text: para.trim(),
+  }));
+  return JSON.stringify(blocks);
 }
 
 export function parseDoc(raw: string | null | undefined): Block[] {

@@ -408,6 +408,89 @@ ok('percent is clamped to 0-100', (await call(dev, `/api/tasks/${task.id}/progre
   method: 'POST', body: JSON.stringify({ percent: 900, doneSummary: 'over the top' }) }))
   .body.task?.progress === 100);
 
+console.log('\nA split task and its pieces finish together');
+{
+  // Up: approve every piece and the umbrella closes itself.
+  const parent = (await call(lead, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — cascade up ${RUN}` }) })).body.task;
+  const afterSplit = (await call(lead, `/api/tasks/${parent.id}/split`, {
+    method: 'POST',
+    body: JSON.stringify({ pieces: [
+      { title: 'Cascade piece A', description: JSON.stringify([{ id: 'p1', type: 'paragraph', text: 'Do the first half.' }]), assigneeId: dev.user.id },
+      { title: 'Cascade piece B', assigneeId: otherDev.user.id },
+    ] }),
+  })).body.task;
+  ok('the split went through', afterSplit?.subtasks?.length === 2, String(afterSplit?.subtasks?.length));
+
+  const [pieceA, pieceB] = afterSplit.subtasks;
+  ok('a piece carries its own brief', JSON.parse(pieceA.description)[0]?.text === 'Do the first half.',
+     pieceA.description);
+  ok('a piece with no brief is simply empty', pieceB.description === '[]', pieceB.description);
+
+  await call(dev, `/api/tasks/${pieceA.id}/progress`, {
+    method: 'POST', body: JSON.stringify({ submit: true, percent: 100, doneSummary: 'first half done' }) });
+  await call(otherDev, `/api/tasks/${pieceB.id}/progress`, {
+    method: 'POST', body: JSON.stringify({ submit: true, percent: 100, doneSummary: 'second half done' }) });
+
+  await call(lead, `/api/tasks/${pieceA.id}/review`, {
+    method: 'POST', body: JSON.stringify({ decision: 'approve', note: 'good' }) });
+  ok('the umbrella is not done while a piece is outstanding',
+     (await call(lead, `/api/tasks/${parent.id}`)).body.task?.status !== 'DONE');
+
+  await call(lead, `/api/tasks/${pieceB.id}/review`, {
+    method: 'POST', body: JSON.stringify({ decision: 'approve', note: 'good' }) });
+  const closed = (await call(lead, `/api/tasks/${parent.id}`)).body.task;
+  ok('approving the last piece closes the whole task', closed?.status === 'DONE', closed?.status);
+  ok('and it counts as fully done', closed?.progress === 100, String(closed?.progress));
+  ok('with a completion time', typeof closed?.completed_at === 'number');
+
+  await call(ceo, `/api/tasks/${parent.id}`, { method: 'DELETE' });
+}
+
+{
+  // Down: close the umbrella and the pieces go with it, unmarked or not.
+  const parent = (await call(lead, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — cascade down ${RUN}` }) })).body.task;
+  const afterSplit = (await call(lead, `/api/tasks/${parent.id}/split`, {
+    method: 'POST',
+    body: JSON.stringify({ pieces: [
+      { title: 'Down piece A', assigneeId: dev.user.id },
+      { title: 'Down piece B', assigneeId: otherDev.user.id },
+    ] }),
+  })).body.task;
+  const ids = afterSplit.subtasks.map((sx) => sx.id);
+
+  await call(dev, `/api/tasks/${ids[0]}/progress`, {
+    method: 'POST', body: JSON.stringify({ submit: true, percent: 100, doneSummary: 'done' }) });
+
+  ok('marking the whole task done is allowed while pieces are open',
+     (await call(lead, `/api/tasks/${parent.id}`, {
+       method: 'PATCH', body: JSON.stringify({ status: 'DONE' }) })).status === 200);
+
+  const after = (await call(lead, `/api/tasks/${parent.id}`)).body.task;
+  ok('every piece is done too', after.subtasks.every((sx) => sx.status === 'DONE'),
+     after.subtasks.map((sx) => sx.status).join(','));
+  ok('nobody has to close them one by one', after.subtasks.every((sx) => sx.progress === 100));
+  ok('the developer is told their piece was closed with it',
+     (await call(otherDev, '/api/notifications')).body.notifications.some(
+       (n) => n.task_id === ids[1] && n.type === 'approved'));
+
+  await call(ceo, `/api/tasks/${parent.id}`, { method: 'DELETE' });
+}
+
+console.log('\nHigh is what a task is unless somebody says otherwise');
+{
+  const plain = (await call(manager, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — default priority ${RUN}` }) })).body.task;
+  ok('a task with no priority given is High', plain?.priority === 'HIGH', plain?.priority);
+  const chosen = (await call(manager, '/api/tasks', {
+    method: 'POST', body: JSON.stringify({ title: `E2E — chosen priority ${RUN}`, priority: 'LOW' }) })).body.task;
+  ok('a stated priority is still honoured', chosen?.priority === 'LOW', chosen?.priority);
+  for (const id of [plain?.id, chosen?.id].filter(Boolean)) {
+    await call(ceo, `/api/tasks/${id}`, { method: 'DELETE' });
+  }
+}
+
 console.log('\nSubmit -> review -> approve');
 ok('submitting without a summary is rejected', (await call(dev, `/api/tasks/${task.id}/progress`, {
   method: 'POST', body: JSON.stringify({ submit: true, percent: 100 }) })).status === 400);

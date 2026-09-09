@@ -80,7 +80,10 @@ export const api = {
       }>
     ) => request<{ task: TaskFull }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: string) => request<{ ok: true }>(`/api/tasks/${id}`, { method: 'DELETE' }),
-    split: (id: string, pieces: { title: string; assigneeId: string | null; estimate?: number | null }[]) =>
+    split: (
+      id: string,
+      pieces: { title: string; description?: string; assigneeId: string | null; estimate?: number | null }[]
+    ) =>
       request<{ task: TaskFull }>(`/api/tasks/${id}/split`, {
         method: 'POST',
         body: JSON.stringify({ pieces }),

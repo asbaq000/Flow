@@ -3,20 +3,23 @@
 import { useState } from 'react';
 import { Loader2, Paperclip, Plus, Split, Trash2, Wand2, X } from 'lucide-react';
 import type { TaskFull, User } from '@/lib/types';
-import { MAX_ATTACHMENT_BYTES } from '@/lib/types';
+import { MAX_ATTACHMENT_BYTES, docFromText } from '@/lib/types';
 import { api } from '@/lib/client';
 import { Avatar, Modal, UserPicker } from './ui';
 
 interface Piece {
   key: number;
   title: string;
+  /** What this person specifically is being asked for. */
+  description: string;
   assigneeId: string | null;
   /** Files that belong to this piece alone, uploaded once it exists. */
   files: File[];
 }
 
 let nextKey = 1;
-const makePiece = (title = ''): Piece => ({ key: nextKey++, title, assigneeId: null, files: [] });
+const makePiece = (title = ''): Piece =>
+  ({ key: nextKey++, title, description: '', assigneeId: null, files: [] });
 
 export default function SplitModal({
   task, me, users, canAssign, onClose, onSplit,
@@ -57,7 +60,11 @@ export default function SplitModal({
     try {
       const { task: updated } = await api.tasks.split(
         task.id,
-        filled.map((p) => ({ title: p.title.trim(), assigneeId: canAssign ? p.assigneeId : me.id }))
+        filled.map((p) => ({
+          title: p.title.trim(),
+          description: docFromText(p.description),
+          assigneeId: canAssign ? p.assigneeId : me.id,
+        }))
       );
 
       /*
@@ -189,6 +196,15 @@ export default function SplitModal({
               <Trash2 size={14} />
             </button>
             </div>
+
+            {/* The brief for this piece alone. */}
+            <textarea
+              className="input ml-8 w-auto resize-y py-1.5 text-[12.5px]"
+              rows={2}
+              placeholder={`What ${canAssign ? 'they are' : 'you are'} being asked for here (optional)`}
+              value={piece.description}
+              onChange={(e) => update(piece.key, { description: e.target.value })}
+            />
 
             {/* Files for this piece only — they land on the subtask, so the
                 developer assigned it sees their own documents and no one
