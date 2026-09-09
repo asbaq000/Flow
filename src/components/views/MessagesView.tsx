@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check, Download, Eraser, FileText, Hash, Loader2, Lock, MessageSquare, MoreHorizontal, Paperclip,
-  Pencil, Plus, Send, Trash2, Users2, X,
+  ArrowLeft, Check, Download, Eraser, FileText, Hash, Loader2, Lock, MessageSquare, MoreHorizontal,
+  Paperclip, Pencil, Plus, Send, Trash2, Users2, X,
 } from 'lucide-react';
 import type { ConversationFull, Message, MessageFile, TaskFull, User } from '@/lib/types';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/types';
@@ -388,8 +388,15 @@ export default function MessagesView({
 
   return (
     <div className="flex h-full min-h-0">
-      {/* rooms */}
-      <div className="flex w-[300px] shrink-0 flex-col border-r" style={{ background: 'var(--bg-sidebar)' }}>
+      {/*
+        * Two panes side by side needs room for both. A phone has room for one,
+        * so it shows the list until somebody picks a room and the thread after
+        * — the ordinary way a messages app behaves on a small screen.
+        */}
+      <div
+        className={`${current ? 'hidden md:flex' : 'flex'} w-full shrink-0 flex-col border-r md:w-[300px]`}
+        style={{ background: 'var(--bg-sidebar)' }}
+      >
         <div className="flex items-center gap-2 px-4 py-3">
           <h2 className="text-[14px] font-semibold">Messages</h2>
           <Popover
@@ -430,7 +437,7 @@ export default function MessagesView({
       </div>
 
       {/* thread */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className={`${current ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col`}>
         {!room ? (
           <div className="grid flex-1 place-items-center px-6 text-center">
             <div>
@@ -444,7 +451,14 @@ export default function MessagesView({
           </div>
         ) : (
           <>
-            <header className="flex items-center gap-3 border-b px-4 py-2.5">
+            <header className="flex items-center gap-3 border-b px-3 py-2.5 sm:px-4">
+              <button
+                onClick={() => setCurrent(null)}
+                className="btn btn-ghost -ml-1 shrink-0 px-1.5 md:hidden"
+                aria-label="Back to conversations"
+              >
+                <ArrowLeft size={16} />
+              </button>
               {room.kind === 'task' ? (
                 <span className="grid h-8 w-8 place-items-center rounded-xl" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
                   <Hash size={15} />

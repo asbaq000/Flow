@@ -560,20 +560,33 @@ export default function Workspace({
           </div>
         </div>
 
-        <header data-page-head className="flex min-h-[46px] shrink-0 items-center gap-2 border-b px-4 py-1.5">
+        {/*
+          * The toolbar carries more than a phone is wide, and hiding controls
+          * would put some of them out of reach entirely. So below the fold it
+          * scrolls sideways as a strip: everything stays reachable, and the
+          * pieces that only decorate — the date, the count, the live dot —
+          * step out of the way first.
+          */}
+        <header
+          data-page-head
+          className="scroll-thin flex min-h-[46px] shrink-0 items-center gap-2 overflow-x-auto border-b px-3 py-1.5 sm:px-4"
+        >
           {BOARD_SECTIONS.includes(section) ? (
             <>
-              <div className="leading-tight">
+              <div className="hidden shrink-0 leading-tight sm:block">
                 <div className="text-[15px] font-bold">{monthName}</div>
-                <div className="text-[11px] text-[var(--text-tertiary)]">Today is {todayLabel}</div>
+                <div className="hidden text-[11px] text-[var(--text-tertiary)] sm:block">Today is {todayLabel}</div>
               </div>
               <span className="mx-2 hidden h-6 w-px sm:block" style={{ background: 'var(--border)' }} />
               <Popover
                 width={200}
                 trigger={({ toggle }) => (
-                  <button onClick={toggle} className="btn btn-ghost gap-1.5 text-[13px]">
-                    <span className="font-semibold">Board</span>
-                    <span className="text-[var(--text-tertiary)]">· {SCOPES.find((x) => x.id === section)?.label}</span>
+                  <button onClick={toggle} className="btn btn-ghost shrink-0 gap-1.5 text-[13px]">
+                    <span className="hidden font-semibold sm:inline">Board</span>
+                    <span className="text-[var(--text-tertiary)]">
+                      <span className="hidden sm:inline">· </span>
+                      {SCOPES.find((x) => x.id === section)?.label}
+                    </span>
                     <ChevronDown size={13} className="text-[var(--text-tertiary)]" />
                   </button>
                 )}
@@ -598,7 +611,7 @@ export default function Workspace({
             </>
           ) : (
             <>
-              <h1 className="truncate text-[14px] font-semibold">{sectionTitle(section)}</h1>
+              <h1 className="shrink-0 truncate text-[14px] font-semibold">{sectionTitle(section)}</h1>
               {section === 'meetings' && (
                 <span className="hidden rounded-full px-1.5 py-0.5 font-mono text-[11px] font-medium text-[var(--text-secondary)] sm:inline" style={{ background: 'var(--well)' }}>
                   {meetings.length}
@@ -725,7 +738,16 @@ export default function Workspace({
 
 
 
-          <button onClick={() => setNewTaskOpen(true)} className="btn btn-primary">
+          {/*
+            * Sticky rather than merely last: the strip scrolls on a phone, and
+            * the one button everybody is reaching for should never be the part
+            * that scrolled off.
+            */}
+          <button
+            onClick={() => setNewTaskOpen(true)}
+            className="btn btn-primary sticky right-0 shrink-0"
+            style={{ boxShadow: '-8px 0 8px -6px var(--bg)' }}
+          >
             <Plus size={14} />
             <span className="hidden sm:inline">Create task</span>
           </button>
