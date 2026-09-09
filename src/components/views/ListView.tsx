@@ -105,12 +105,22 @@ function Row({
           <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: STATUSES.find((s) => s.id === task.status)!.dot }} />
         </StatusPicker>
 
-        <button onClick={() => onOpen(task.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        <button
+          onClick={() => onOpen(task.id)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          title={task.title}
+        >
           <span className="shrink-0 text-[11px] text-[var(--text-tertiary)]">TSK-{task.seq}</span>
-          <span className={`truncate text-[13.5px] ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}>
+          {/* min-w-0 is what lets this shrink; without it the row grows to fit. */}
+          <span className={`min-w-0 flex-1 truncate text-[13.5px] ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}>
             {task.title}
           </span>
-          {task.tags.map((t) => <TagChip key={t.id} tag={t} />)}
+          <span className="hidden shrink-0 items-center gap-1 sm:flex">
+            {task.tags.slice(0, 2).map((t) => <TagChip key={t.id} tag={t} />)}
+            {task.tags.length > 2 && (
+              <span className="text-[11px] text-[var(--text-tertiary)]">+{task.tags.length - 2}</span>
+            )}
+          </span>
         </button>
 
         {task.subtasks.length > 0 && (

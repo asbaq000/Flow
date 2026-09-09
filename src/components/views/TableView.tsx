@@ -59,7 +59,7 @@ export default function TableView({ tasks, users, me, onOpen, onUpdate }: Props)
 
   return (
     <div className="scroll-thin h-full overflow-auto">
-      <table className="w-full border-collapse text-[13px]">
+      <table className="w-full table-fixed border-collapse text-[13px]">
         <thead className="sticky top-0 z-10" style={{ background: 'var(--bg)' }}>
           <tr className="border-b">
             <Th className="w-9" />
@@ -133,11 +133,15 @@ function Row({
         )}
       </td>
 
-      <td className="px-2 py-1.5">
-        <button onClick={() => onOpen(task.id)} className="flex w-full items-center gap-2 text-left">
-          {nested && <span className="ml-3 text-[var(--text-tertiary)]">↳</span>}
+      <td className="min-w-0 px-2 py-1.5">
+        <button
+          onClick={() => onOpen(task.id)}
+          className="flex w-full min-w-0 items-center gap-2 text-left"
+          title={task.title}
+        >
+          {nested && <span className="shrink-0 text-[var(--text-tertiary)]">↳</span>}
           <span className="shrink-0 text-[11px] text-[var(--text-tertiary)]">TSK-{task.seq}</span>
-          <span className={`truncate font-medium ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}>
+          <span className={`min-w-0 flex-1 truncate font-medium ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}>
             {task.title}
           </span>
           {task.subtasks.length > 0 && (
@@ -185,7 +189,7 @@ function Row({
       </td>
 
       <td className="px-2 py-1.5">
-        <div className="flex flex-wrap gap-1">
+        <div className="flex min-w-0 items-center gap-1 overflow-hidden">
           {task.tags.slice(0, 2).map((t) => <TagChip key={t.id} tag={t} />)}
           {task.tags.length > 2 && (
             <span className="text-[11px] text-[var(--text-tertiary)]">+{task.tags.length - 2}</span>

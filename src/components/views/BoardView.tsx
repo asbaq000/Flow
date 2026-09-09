@@ -382,8 +382,10 @@ export function TaskCard({
         </span>
       </div>
 
+      {/* Three lines, then an ellipsis: a card is a summary, not the brief. */}
       <p
-        className={`text-[13.5px] font-semibold leading-snug ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}
+        title={task.title}
+        className={`line-clamp-3 text-[13.5px] font-semibold leading-snug ${task.status === 'DONE' ? 'text-[var(--text-tertiary)] line-through' : ''}`}
       >
         {task.title}
       </p>
